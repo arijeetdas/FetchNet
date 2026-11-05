@@ -6,6 +6,7 @@ import android.app.PendingIntent
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.graphics.Bitmap
 import android.media.MediaScannerConnection
 import android.net.Uri
 import android.os.Build
@@ -14,7 +15,9 @@ import android.os.Looper
 import android.webkit.MimeTypeMap
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
+import androidx.core.content.ContextCompat
 import androidx.core.graphics.drawable.IconCompat
+import androidx.core.graphics.drawable.toBitmap
 import java.io.File
 
 /**
@@ -58,6 +61,26 @@ object DownloadNotifier {
     @Volatile var onAction: ((action: String, taskId: String?) -> Unit)? = null
 
     fun notificationIdFor(taskId: String) = 41000 + (taskId.hashCode() and 0xFFFFF)
+
+    private const val BRAND_VIOLET = 0xFF7C3AED.toInt()
+
+    @Volatile private var appIconBitmap: Bitmap? = null
+
+    /**
+     * The launcher icon as a bitmap, in the device's own icon shape (adaptive
+     * icons are drawn through the launcher mask, so it matches the home screen).
+     */
+    private fun appIcon(context: Context): Bitmap {
+        appIconBitmap?.let { return it }
+        val size = (context.resources.displayMetrics.density * 64).toInt().coerceIn(96, 256)
+        val bitmap = try {
+            context.packageManager.getApplicationIcon(context.packageName).toBitmap(size, size, Bitmap.Config.ARGB_8888)
+        } catch (_: Exception) {
+            ContextCompat.getDrawable(context, R.mipmap.ic_launcher)!!.toBitmap(size, size, Bitmap.Config.ARGB_8888)
+        }
+        appIconBitmap = bitmap
+        return bitmap
+    }
 
     private fun channels(context: Context) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
@@ -132,6 +155,10 @@ object DownloadNotifier {
             .setShowWhen(false)
             .setContentIntent(openAppIntent(context, e.notificationId))
             .addAction(R.drawable.ic_action_cancel, "Cancel", cancelIntent(context, e.id, e.notificationId))
+            // Live (promoted) notifications are drawn with the monochrome small
+            // icon on some skins (e.g. OriginOS); the large icon brings back
+            // the real app icon, like the finished notification has.
+            .setLargeIcon(appIcon(context))
             // Android 16+: promote to a Live Update with a status-bar chip.
             .setRequestPromotedOngoing(true)
             .setShortCriticalText(if (indeterminate) "…" else "${e.progress}%")
@@ -139,9 +166,13 @@ object DownloadNotifier {
             builder.setStyle(
                 NotificationCompat.ProgressStyle()
                     .setProgressIndeterminate(indeterminate)
+                    // One brand-violet segment, otherwise the system paints
+                    // the bar in its own accent colour.
+                    .setProgressSegments(listOf(NotificationCompat.ProgressStyle.Segment(100).setColor(BRAND_VIOLET)))
                     .setProgress(e.progress.coerceIn(0, 100))
                     .setStyledByProgress(true)
-                    .setProgressTrackerIcon(IconCompat.createWithResource(context, R.drawable.ic_stat_fetchnet))
+                    // The full-colour app icon rides the bar.
+                    .setProgressTrackerIcon(IconCompat.createWithBitmap(appIcon(context)))
             )
         } else {
             builder.setProgress(100, e.progress.coerceIn(0, 100), indeterminate)

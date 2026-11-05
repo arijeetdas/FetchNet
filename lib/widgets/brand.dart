@@ -118,7 +118,7 @@ class GradientText extends StatelessWidget {
       shaderCallback: (bounds) => AppColors.brandGradient.createShader(Offset.zero & bounds.size),
       // Padding keeps glyph overhang (tight letter-spacing) inside the shader.
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 6),
+        padding: const EdgeInsets.only(right: 6),
         child: Text(text, style: style, textAlign: textAlign),
       ),
     );

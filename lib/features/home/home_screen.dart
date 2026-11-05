@@ -245,7 +245,7 @@ class _HomeScreenState extends State<HomeScreen> {
               maxExtent: 1080,
               sliver: SliverList.list(
                 children: [
-                  _Hero(compact: _phase == _Phase.result && !wide),
+                  const _Hero(),
                   const SizedBox(height: 16),
                   const EngineBanner(),
                   Center(
@@ -312,9 +312,7 @@ class _HomeScreenState extends State<HomeScreen> {
 }
 
 class _Hero extends StatelessWidget {
-  const _Hero({required this.compact});
-
-  final bool compact;
+  const _Hero();
 
   @override
   Widget build(BuildContext context) {
@@ -327,7 +325,7 @@ class _Hero extends StatelessWidget {
       alignment: Alignment.topCenter,
       child: Row(
         children: [
-          if (!wide) ...[FetchNetLogo(size: compact ? 36 : 48), const SizedBox(width: 14)],
+          if (!wide) ...[const FetchNetLogo(size: 72), const SizedBox(width: 16)],
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -335,18 +333,33 @@ class _Hero extends StatelessWidget {
                 if (!wide)
                   GradientText(
                     'FetchNet',
-                    style: (compact ? theme.textTheme.titleLarge : theme.textTheme.headlineSmall)?.copyWith(
+                    style: theme.textTheme.headlineLarge?.copyWith(
                       fontWeight: FontWeight.w900,
+                      letterSpacing: -1.2,
+                      height: 1.1,
                     ),
                   )
                 else
                   Text('What do you want to save today?', style: theme.textTheme.headlineMedium),
-                if (!compact)
+                if (wide)
                   Text(
-                    wide
-                        ? 'Paste a link from YouTube or any of 1000+ supported sites.'
-                        : 'Paste a link. Pick a quality. Done.',
+                    'Paste a link from YouTube or any of 1000+ supported sites.',
                     style: theme.textTheme.bodyMedium?.copyWith(color: scheme.onSurfaceVariant),
+                  )
+                else
+                  // One line on every phone: shrinks only as much as a narrow
+                  // screen needs instead of leaving "Done." on its own line.
+                  FittedBox(
+                    fit: BoxFit.scaleDown,
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                      'Paste a link. Pick a quality. Done.',
+                      maxLines: 1,
+                      style: theme.textTheme.bodyLarge?.copyWith(
+                        color: scheme.onSurfaceVariant,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
                   ),
               ],
             ),

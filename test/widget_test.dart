@@ -30,4 +30,19 @@ void main() {
     expect(info.audioOptions(ffmpeg: true).first.extension, 'mp3');
     expect(info.audioOptions(ffmpeg: false).single.extension, 'webm');
   });
+
+  test('vertical videos are named by their shorter side', () {
+    const json = '''
+{"title":"Short","webpage_url":"https://example.com/s","duration":30,
+ "formats":[
+  {"format_id":"v1","vcodec":"avc1","acodec":"none","width":1080,"height":1920,"fps":60,"ext":"mp4","filesize":19000000},
+  {"format_id":"v2","vcodec":"avc1","acodec":"none","width":720,"height":1280,"fps":30,"ext":"mp4","filesize":9000000},
+  {"format_id":"a1","vcodec":"none","acodec":"mp4a","abr":128,"ext":"m4a","filesize":500000}
+ ]}''';
+    final options = MediaInfo.parse(json, sourceUrl: 'x').videoOptions(ffmpeg: true);
+    expect(options.map((o) => o.label), ['1080p', '720p']);
+    expect(options.map((o) => o.badge), ['HD', 'HD']);
+    // The selector still targets the real stream height.
+    expect(options.first.formatArgs[1], contains('height=1920'));
+  });
 }

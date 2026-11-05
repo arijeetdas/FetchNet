@@ -205,6 +205,11 @@ class MediaInfo {
     for (final h in heights) {
       final f = byHeight[h]!;
       final fps = (f['fps'] as num?)?.round();
+      // Quality is named after the shorter side, so a vertical 1080x1920
+      // Short is "1080p" (as YouTube shows it), not "1920p". The format
+      // selector still matches on the real height.
+      final w = (f['width'] as num?)?.toInt();
+      final res = (w != null && w > 0 && w < h) ? w : h;
       final merge = !_hasAudio(f);
       final videoSize = _size(f, duration);
       final size = videoSize == null ? null : videoSize + (merge ? (audioSize ?? 0) : 0);
@@ -213,14 +218,14 @@ class MediaInfo {
           : 'b[height=$h]/b[height<=$h]/b';
       options.add(DownloadOption(
         kind: MediaKind.video,
-        label: '${h}p',
+        label: '${res}p',
         detail: [if (fps != null && fps > 30) '$fps fps', ffmpeg ? 'MP4' : (f['ext'] ?? 'video').toString().toUpperCase()]
             .join(' · '),
-        badge: h >= 2160
+        badge: res >= 2160
             ? '4K'
-            : h >= 1440
+            : res >= 1440
                 ? '2K'
-                : h >= 720
+                : res >= 720
                     ? 'HD'
                     : null,
         sizeBytes: size,

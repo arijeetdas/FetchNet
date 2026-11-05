@@ -11,6 +11,7 @@ import android.os.Bundle
 import android.os.Environment
 import android.os.Handler
 import android.os.Looper
+import android.util.Log
 import android.webkit.MimeTypeMap
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
@@ -27,6 +28,10 @@ import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
 class MainActivity : FlutterActivity() {
+
+    private companion object {
+        const val TAG = "FetchNet"
+    }
 
     private val mainHandler = Handler(Looper.getMainLooper())
     private val executor: ExecutorService = Executors.newCachedThreadPool()
@@ -71,7 +76,8 @@ class MainActivity : FlutterActivity() {
                         val version = YoutubeDL.getInstance().version(applicationContext)
                         postResult { result.success(mapOf("version" to version)) }
                     } catch (e: Throwable) {
-                        postResult { result.error("init_failed", e.message ?: e.toString(), null) }
+                        Log.e(TAG, "engine init failed", e)
+                        postResult { result.error("init_failed", describe(e), null) }
                     }
                 }
 
@@ -88,7 +94,8 @@ class MainActivity : FlutterActivity() {
                             result.success(mapOf("status" to (status?.name ?: "UNKNOWN"), "version" to version))
                         }
                     } catch (e: Throwable) {
-                        postResult { result.error("update_failed", e.message ?: e.toString(), null) }
+                        Log.e(TAG, "engine update failed", e)
+                        postResult { result.error("update_failed", describe(e), null) }
                     }
                 }
 
@@ -292,6 +299,12 @@ class MainActivity : FlutterActivity() {
 
     private fun postResult(block: () -> Unit) = mainHandler.post(block)
 
+    /** "Type: message ← CauseType: message …" so failures are never a bare class name. */
+    private fun describe(e: Throwable): String =
+        generateSequence(e) { it.cause }.take(4).joinToString("  ←  ") { t ->
+            listOfNotNull(t.javaClass.name, t.message?.takeIf { it.isNotBlank() }).joinToString(": ")
+        }
+
     @Synchronized
     private fun ensureEngine() {
         if (engineReady) return
@@ -332,7 +345,8 @@ class MainActivity : FlutterActivity() {
         } catch (e: InterruptedException) {
             mapOf("exitCode" to -2, "out" to "", "err" to "Cancelled")
         } catch (e: Throwable) {
-            mapOf("exitCode" to -1, "out" to "", "err" to (e.message ?: e.toString()))
+            Log.e(TAG, "yt-dlp run failed", e)
+            mapOf("exitCode" to -1, "out" to "", "err" to describe(e))
         }
     }
 

@@ -1,10 +1,12 @@
 package com.fetchnet
 
 import android.Manifest
+import android.app.PictureInPictureParams
 import android.content.ActivityNotFoundException
 import android.content.ClipData
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.content.res.Configuration
 import android.media.MediaScannerConnection
 import android.net.Uri
 import android.os.Build
@@ -13,6 +15,7 @@ import android.os.Environment
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
+import android.util.Rational
 import android.webkit.MimeTypeMap
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
@@ -47,17 +50,29 @@ class MainActivity : FlutterActivity() {
     private val pendingPermissions = mutableMapOf<Int, MethodChannel.Result>()
     private var nextPermissionCode = 7100
 
+    // ───── Picture-in-picture (YouTube player) ─────
+    private var pipEvents: EventChannel.EventSink? = null
+    private var autoPip = false
+    private var pipAspect = Rational(16, 9)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         pendingSharedText = extractSharedText(intent)
-        if (intent?.getStringExtra(DownloadNotifier.EXTRA_OPEN_TAB) == "downloads") pendingLaunchAction = "open_downloads"
+        tabAction(intent)?.let { pendingLaunchAction = it }
+    }
+
+    /** `open_downloads` / `open_history` / `open_settings` from a notification or an app shortcut. */
+    private fun tabAction(intent: Intent?): String? {
+        val tab = intent?.getStringExtra(DownloadNotifier.EXTRA_OPEN_TAB) ?: return null
+        return if (tab in setOf("downloads", "history", "settings")) "open_$tab" else null
     }
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
-        if (intent.getStringExtra(DownloadNotifier.EXTRA_OPEN_TAB) == "downloads") {
+        val action = tabAction(intent)
+        if (action != null) {
             val sink = actionEvents
-            if (sink != null) sink.success(mapOf("action" to "open_downloads")) else pendingLaunchAction = "open_downloads"
+            if (sink != null) sink.success(mapOf("action" to action)) else pendingLaunchAction = action
             return
         }
         val text = extractSharedText(intent) ?: return
@@ -284,6 +299,24 @@ class MainActivity : FlutterActivity() {
                     result.success(null)
                 }
 
+                "pipSupported" -> result.success(pipSupported())
+
+                // Shrinks the app into a floating video window.
+                "enterPip" -> {
+                    pipAspect = aspect(call.argument<Int>("width"), call.argument<Int>("height"))
+                    result.success(enterPip())
+                }
+
+                // Enter PiP by itself when the user leaves the app (video playing).
+                "setAutoPip" -> {
+                    autoPip = call.argument<Boolean>("enabled") == true
+                    pipAspect = aspect(call.argument<Int>("width"), call.argument<Int>("height"))
+                    if (Build.VERSION.SDK_INT >= 31 && pipSupported()) {
+                        runCatching { setPictureInPictureParams(pipParams()) }
+                    }
+                    result.success(null)
+                }
+
                 "consumeLaunchAction" -> {
                     val action = pendingLaunchAction
                     pendingLaunchAction = null
@@ -307,6 +340,63 @@ class MainActivity : FlutterActivity() {
             mainHandler.post { actionEvents?.success(mapOf("action" to action, "id" to taskId)) }
         }
 
+        // ───── Media notification (YouTube player) ─────
+        MethodChannel(messenger, "fetchnet/media").setMethodCallHandler { call, result ->
+            when (call.method) {
+                "update" -> {
+                    val bytes = call.argument<ByteArray>("art")
+                    val keepArt = call.argument<Boolean>("keepArt") == true
+                    val art = when {
+                        bytes != null -> runCatching { android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size) }.getOrNull()
+                        keepArt -> MediaBridge.state?.art
+                        else -> null
+                    }
+                    MediaBridge.update(
+                        applicationContext,
+                        MediaState(
+                            title = call.argument<String>("title") ?: "",
+                            artist = call.argument<String>("artist") ?: "",
+                            art = art,
+                            durationMs = (call.argument<Number>("durationMs") ?: 0).toLong(),
+                            positionMs = (call.argument<Number>("positionMs") ?: 0).toLong(),
+                            playing = call.argument<Boolean>("playing") == true,
+                            speed = (call.argument<Number>("speed") ?: 1.0).toFloat(),
+                            canPrevious = call.argument<Boolean>("canPrevious") == true,
+                            canNext = call.argument<Boolean>("canNext") == true,
+                        ),
+                    )
+                    result.success(null)
+                }
+
+                "stop" -> {
+                    MediaBridge.stop()
+                    result.success(null)
+                }
+
+                else -> result.notImplemented()
+            }
+        }
+
+        EventChannel(messenger, "fetchnet/media/events").setStreamHandler(object : EventChannel.StreamHandler {
+            override fun onListen(arguments: Any?, events: EventChannel.EventSink?) {
+                MediaBridge.events = events
+            }
+
+            override fun onCancel(arguments: Any?) {
+                MediaBridge.events = null
+            }
+        })
+
+        EventChannel(messenger, "fetchnet/pip").setStreamHandler(object : EventChannel.StreamHandler {
+            override fun onListen(arguments: Any?, events: EventChannel.EventSink?) {
+                pipEvents = events
+            }
+
+            override fun onCancel(arguments: Any?) {
+                pipEvents = null
+            }
+        })
+
         EventChannel(messenger, "fetchnet/share").setStreamHandler(object : EventChannel.StreamHandler {
             override fun onListen(arguments: Any?, events: EventChannel.EventSink?) {
                 shareEvents = events
@@ -324,8 +414,51 @@ class MainActivity : FlutterActivity() {
         pending.success(grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED)
     }
 
+    private fun pipSupported(): Boolean =
+        Build.VERSION.SDK_INT >= 26 && packageManager.hasSystemFeature(PackageManager.FEATURE_PICTURE_IN_PICTURE)
+
+    /** Android only accepts ratios between 1:2.39 and 2.39:1. */
+    private fun aspect(width: Int?, height: Int?): Rational {
+        if (width == null || height == null || width <= 0 || height <= 0) return Rational(16, 9)
+        val r = width.toDouble() / height
+        return when {
+            r > 2.39 -> Rational(239, 100)
+            r < 1 / 2.39 -> Rational(100, 239)
+            else -> Rational(width, height)
+        }
+    }
+
+    @androidx.annotation.RequiresApi(26)
+    private fun pipParams(): PictureInPictureParams {
+        val builder = PictureInPictureParams.Builder().setAspectRatio(pipAspect)
+        if (Build.VERSION.SDK_INT >= 31) {
+            builder.setAutoEnterEnabled(autoPip)
+            builder.setSeamlessResizeEnabled(true)
+        }
+        return builder.build()
+    }
+
+    private fun enterPip(): Boolean {
+        if (Build.VERSION.SDK_INT < 26 || !pipSupported()) return false
+        return runCatching { enterPictureInPictureMode(pipParams()) }.getOrDefault(false)
+    }
+
+    override fun onUserLeaveHint() {
+        super.onUserLeaveHint()
+        // Android 12+ enters by itself (setAutoEnterEnabled).
+        if (autoPip && Build.VERSION.SDK_INT in 26..30) enterPip()
+    }
+
+    override fun onPictureInPictureModeChanged(isInPictureInPictureMode: Boolean, newConfig: Configuration) {
+        super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
+        pipEvents?.success(isInPictureInPictureMode)
+    }
+
     override fun onDestroy() {
         if (isFinishing) {
+            // The player lives in this engine: its controls go with it.
+            MediaBridge.events = null
+            MediaBridge.stop()
             DownloadNotifier.onAction = null
             DownloadNotifier.clearAll(applicationContext)
         }
@@ -363,6 +496,14 @@ class MainActivity : FlutterActivity() {
         return try {
             ensureEngine()
             val request = YoutubeDLRequest(emptyList<String>())
+            // youtubedl-android passes --no-cache-dir unless it gets a cache
+            // dir. Without one, every run re-downloads YouTube's player script
+            // and re-solves its JS challenge in QuickJS: the slowest part of a
+            // lookup on a phone. (Options go before our args, ahead of "--".)
+            if ("--cache-dir" !in args && "--no-cache-dir" !in args) {
+                val cache = File(cacheDir, "yt-dlp").apply { mkdirs() }
+                request.addOption("--cache-dir", cache.absolutePath)
+            }
             request.addCommands(args)
             val response = YoutubeDL.getInstance().execute(request, id.ifEmpty { null }, redirectErrorStream) { _, _, line ->
                 synchronized(tail) {

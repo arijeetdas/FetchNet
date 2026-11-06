@@ -5,6 +5,91 @@ Versions follow `version: <name>+<build>` in `pubspec.yaml`.
 
 ---
 
+## 🎬 v1.1.1 — 2026-11-07
+
+> **Build 3** · YouTube in FetchNet, rebuilt: its own ad-free player, new tabs, channels and posts, smarter search, plus a media notification, album covers for music and app shortcuts on Android.
+
+### ✨ Highlights
+
+- ▶️ **A real video player**: FetchNet now plays YouTube videos itself, straight from the video files, so **no ads**. Double-tap to skip, quality, speed, loop, lock, full screen and more.
+- 🧭 **New YouTube tabs**: **Home**, **Trending**, **Music** and **Channels**, with the same navigation bar and side rail as the rest of the app.
+- 📺 **Channels and posts**: the latest videos and community posts from the channels you follow, plus a page for every channel with **Subscribe**.
+- 🎵 **Album covers for music**: songs downloaded from YouTube Music get their square album cover built into the file.
+- 🔔 **Media notification** (Android): control playback from the notification, lock screen, headphones or Bluetooth.
+
+### 🆕 New
+
+#### ▶️ YouTube player
+
+- 🚫 **Ad-free playback**: yt-dlp finds the video's own files and FetchNet plays them directly.
+- 👆 **Double-tap** the left or right side to skip back or ahead 10 seconds. Keep tapping to skip further.
+- ⏯️ **Previous, play/pause and next**, plus 10-second skip buttons.
+- 🎚️ **Quality** from 144p up to 4K, or **Auto** (720p on phones, 1080p on computers).
+- 🐢 **Playback speed** from 0.25× to 3×, and **hold anywhere for 2×** while you press.
+- 🔁 **Loop**, **Fit / Fill screen**, **lock controls** and **full screen**. On phones, turning the phone sideways goes full screen.
+- 😴 **Sleep timer**: stop after 10–90 minutes or at the end of the video.
+- ⌨️ **Keyboard shortcuts** on Windows, macOS and Linux: Space or K, J / L, arrow keys, F, M, 0–9, Shift+N / Shift+P, plus a volume slider.
+- ⏭️ **Up next** with an **Autoplay** switch and a 5-second countdown before the next video starts.
+
+#### 📄 Watch page
+
+- 👤 Title, channel picture and name, subscriber count, and a **Subscribe** button.
+- ⬇️ **Download** opens a popup inside the YouTube view, with the same qualities, thumbnail and tag options and file naming as Home. You no longer leave YouTube to download.
+- 🎧 **Listen only** plays just the sound, keeps going in the background and uses less data.
+- 🖼️ **Picture-in-picture** on Android, which also starts by itself when you leave the app mid-video. On computers, the video shrinks to a **mini player**.
+- 📤 **Share**: the share sheet on Android, or copy the link on computers.
+- 📝 An **expandable description** box.
+- ⬇️ Back keeps the video playing in a **mini player** while you browse. Tap it to return.
+
+#### 🧭 Browsing
+
+- 🔥 **Trending**, with **Now**, **News**, **Sports**, **Live** and **Gaming** chips.
+- 🎵 **Music**: what's new on YouTube Music.
+- 📺 **Channels**: everyone you follow at a glance, with a **Videos / Posts** switch.
+- 🏷️ **Channel pages** with their videos, their posts and **Subscribe / Unsubscribe**.
+- 🔎 **Search suggestions** as you type and your **recent searches**. Remove one, or clear them all.
+- ⬆️ Tap the tab you're already on to jump back to the top.
+
+#### ⚙️ YouTube Settings
+
+- 🎵 **YouTube Music → Album cover art**: audio downloaded from music.youtube.com links gets the song's square album cover built in.
+- 🖼️ **Thumbnail as cover art**: audio downloaded from regular YouTube videos gets the video's thumbnail as its cover.
+
+#### 🤖 Android
+
+- 🔔 **Media notification** for the YouTube player: title, channel, artwork, previous / play-pause / next and a seek bar, also on the lock screen and in quick settings.
+- 🎧 Playback **pauses for calls** and other apps, then picks up again after short interruptions. It also **pauses when headphones are unplugged**.
+- 🚀 **App shortcuts**: long-press the FetchNet icon to jump straight to **Downloads**, **History** or **Settings**. The icons match your light or dark theme.
+
+### 🛠️ Improved
+
+- 🧱 **Cleaner YouTube top bar**: it sits on the app's own background, and the back button is a proper circle.
+- 🔍 Search results no longer show a *"Results for …"* heading and **Home** button. Back clears the search.
+- ⚡ **Videos start faster**: FetchNet skips data playback doesn't need, stops lookups for videos you've moved away from, and on Android keeps yt-dlp's cache so each video (and each download) does less work.
+- ⏱️ While a video gets ready, the player counts the seconds. If YouTube doesn't answer in time, you get a **Try again** button instead of endless loading.
+- 🎚️ A new **Adding cover art…** step shows in download progress.
+
+### 🐞 Fixed
+
+- 🎞️ **Downloads page**: the animation no longer slides down while a download is in progress.
+- 🔔 **Download notification stuck at "Saving…"** (mostly with audio): it now always turns into the finished notification.
+- 📊 Download progress could skip updates after a processing step. It now updates smoothly.
+
+### ⚠️ Notes
+
+- 🎵 Cover art works for **MP3 and M4A** and needs FFmpeg (built into the Android app; installable on Windows, macOS and Linux). If a cover can't be added, the download finishes without it.
+- 🔥 YouTube has retired its own Trending page, so FetchNet's Trending is built from YouTube's News, Sports, Live, Music and Gaming pages.
+- 🎬 On Android, a video pauses when you leave the app unless picture-in-picture or **Listen only** is on. You can resume it from the notification.
+- 📦 The Android app is larger, because it now includes a video player.
+
+### 🧰 Under the hood
+
+- 📦 New dependencies: `media_kit`, `media_kit_video` and `media_kit_libs_video` (the video player).
+- 🔄 The navigation bar and side rail are now shared between the main screens and YouTube.
+- 🧪 New tests for stream picking, video lookups, search suggestions, posts, channel pages, cover art and overlapping fetches.
+
+---
+
 ## 🚀 v1.1.0 — 2026-11-06
 
 > **Build 2** · A big step up: a built-in YouTube experience, one-tap sites, smarter sign-ins, in-app update alerts and a livelier look.

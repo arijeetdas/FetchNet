@@ -53,6 +53,13 @@ object DownloadNotifier {
 
     private val active = LinkedHashMap<String, Active>()
 
+    /**
+     * Downloads already finished. Progress updates that arrive late (method
+     * channel order vs. the media scan in [complete]) must never bring a
+     * finished download's live notification back.
+     */
+    private val finished = LinkedHashSet<String>()
+
     /** Notification id the foreground service is currently attached to. */
     @Volatile var pinnedId: Int? = null
         private set
@@ -61,6 +68,13 @@ object DownloadNotifier {
     @Volatile var onAction: ((action: String, taskId: String?) -> Unit)? = null
 
     fun notificationIdFor(taskId: String) = 41000 + (taskId.hashCode() and 0xFFFFF)
+
+    /**
+     * The "complete" / "failed" notification uses its own id: replacing the
+     * live (foreground, promoted) notification in place raced with the
+     * service letting go of it, and the live one could win ("Saving…" stuck).
+     */
+    private fun doneIdFor(taskId: String) = 2_000_000 + (taskId.hashCode() and 0xFFFFF)
 
     private const val BRAND_VIOLET = 0xFF7C3AED.toInt()
 
@@ -106,6 +120,7 @@ object DownloadNotifier {
     // ───────────────────────── live ─────────────────────────
 
     fun progress(context: Context, id: String, fileName: String, text: String, detail: String, progress: Int) {
+        if (id in finished) return
         channels(context)
         val entry = active.getOrPut(id) {
             Active(id, notificationIdFor(id), fileName, text, detail, progress)
@@ -130,6 +145,21 @@ object DownloadNotifier {
         }
         // Make sure it is visible right away even before the service starts.
         if (service == null) post(context, entry.notificationId, notification)
+    }
+
+    /** Shown only for a moment when the service starts after everything finished. */
+    fun placeholder(context: Context): android.app.Notification {
+        channels(context)
+        return NotificationCompat.Builder(context, CHANNEL_ACTIVE)
+            .setSmallIcon(R.drawable.ic_stat_fetchnet)
+            .setContentTitle("Finishing downloads…")
+            .setSilent(true)
+            .build()
+    }
+
+    private fun markFinished(id: String) {
+        finished.add(id)
+        while (finished.size > 64) finished.remove(finished.first())
     }
 
     /** Called by the service when it starts: the notification to attach to. */
@@ -184,7 +214,8 @@ object DownloadNotifier {
 
     fun complete(context: Context, id: String, fileName: String, path: String, sizeText: String) {
         channels(context)
-        val notificationId = active[id]?.notificationId ?: notificationIdFor(id)
+        markFinished(id)
+        val notificationId = doneIdFor(id)
         val file = File(path)
         val mime = MimeTypeMap.getSingleton().getMimeTypeFromExtension(file.extension.lowercase()) ?: "*/*"
         MediaScannerConnection.scanFile(context.applicationContext, arrayOf(path), arrayOf(mime)) { _, uri ->
@@ -221,7 +252,8 @@ object DownloadNotifier {
 
     fun failed(context: Context, id: String, fileName: String, reason: String) {
         channels(context)
-        val notificationId = active[id]?.notificationId ?: notificationIdFor(id)
+        markFinished(id)
+        val notificationId = doneIdFor(id)
         val notification = NotificationCompat.Builder(context, CHANNEL_DONE)
             .setSmallIcon(R.drawable.ic_stat_fetchnet)
             .setColor(0xFFB3261E.toInt())
@@ -237,15 +269,19 @@ object DownloadNotifier {
     }
 
     fun cancelled(context: Context, id: String) {
-        val notificationId = active[id]?.notificationId ?: notificationIdFor(id)
-        finish(context, id, notificationId, null)
+        markFinished(id)
+        finish(context, id, doneIdFor(id), null)
     }
 
-    /** Stops tracking [id]; re-pins the service if needed, then shows [final] in place. */
-    private fun finish(context: Context, id: String, notificationId: Int, final: android.app.Notification?) {
-        active.remove(id)
+    /**
+     * Stops tracking [id]: the service moves to another live download (or
+     * stops), the live notification is removed and [final] is shown.
+     */
+    private fun finish(context: Context, id: String, doneId: Int, final: android.app.Notification?) {
+        markFinished(id)
+        val liveId = active.remove(id)?.notificationId ?: notificationIdFor(id)
         val service = DownloadService.instance
-        if (pinnedId == notificationId) {
+        if (pinnedId == liveId) {
             val next = active.values.firstOrNull()
             if (next != null) {
                 pinnedId = next.notificationId
@@ -256,11 +292,8 @@ object DownloadNotifier {
             }
         }
         val nm = NotificationManagerCompat.from(context)
-        if (final == null) {
-            nm.cancel(notificationId)
-        } else {
-            post(context, notificationId, final)
-        }
+        nm.cancel(liveId)
+        if (final != null) post(context, doneId, final)
     }
 
     /** App closed: drop every live notification. */

@@ -117,6 +117,17 @@ class MediaInfo {
 
   String? get videoId => raw['id']?.toString();
 
+  /// The link was a YouTube Music one (yt-dlp reports www.youtube.com as the
+  /// page, so the link the user gave is checked too).
+  bool get isYouTubeMusic {
+    if (!isYouTube) return false;
+    for (final u in [raw['original_url'], url]) {
+      final host = Uri.tryParse('${u ?? ''}')?.host.toLowerCase() ?? '';
+      if (host == 'music.youtube.com') return true;
+    }
+    return false;
+  }
+
   /// The uploader's tags (YouTube), in order, without duplicates.
   List<String> get tags {
     final t = raw['tags'];

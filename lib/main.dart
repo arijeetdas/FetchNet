@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:media_kit/media_kit.dart';
 
 import 'app.dart';
 import 'core/app_prefs.dart';
@@ -8,6 +9,7 @@ import 'services/web_session.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  MediaKit.ensureInitialized();
   final prefs = await AppPrefs.load();
   await DeviceEnvironment.initialize();
   await WebSession.initialize();

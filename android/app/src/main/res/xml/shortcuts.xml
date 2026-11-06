@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Long-press the app icon: jump straight to a tab. -->
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut
+        android:shortcutId="downloads"
+        android:enabled="true"
+        android:icon="@drawable/ic_shortcut_downloads"
+        android:shortcutShortLabel="@string/shortcut_downloads"
+        android:shortcutLongLabel="@string/shortcut_downloads_long">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:targetPackage="com.fetchnet"
+            android:targetClass="com.fetchnet.MainActivity">
+            <extra android:name="com.fetchnet.extra.OPEN_TAB" android:value="downloads" />
+        </intent>
+    </shortcut>
+    <shortcut
+        android:shortcutId="history"
+        android:enabled="true"
+        android:icon="@drawable/ic_shortcut_history"
+        android:shortcutShortLabel="@string/shortcut_history"
+        android:shortcutLongLabel="@string/shortcut_history_long">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:targetPackage="com.fetchnet"
+            android:targetClass="com.fetchnet.MainActivity">
+            <extra android:name="com.fetchnet.extra.OPEN_TAB" android:value="history" />
+        </intent>
+    </shortcut>
+    <shortcut
+        android:shortcutId="settings"
+        android:enabled="true"
+        android:icon="@drawable/ic_shortcut_settings"
+        android:shortcutShortLabel="@string/shortcut_settings"
+        android:shortcutLongLabel="@string/shortcut_settings_long">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:targetPackage="com.fetchnet"
+            android:targetClass="com.fetchnet.MainActivity">
+            <extra android:name="com.fetchnet.extra.OPEN_TAB" android:value="settings" />
+        </intent>
+    </shortcut>
+</shortcuts>

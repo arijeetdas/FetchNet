@@ -32,9 +32,197 @@ class YouTubeClient {
     return _page(data['contents']);
   }
 
-  Future<YtPage> search(String query) async {
-    final json = await _post('search', {'query': query});
+  Future<YtPage> search(String query, {String? params}) async {
+    final json = await _post('search', {'query': query, 'params': ?params});
     return _page(json['contents']);
+  }
+
+  /// Any browse page (feeds, channel tabs, destination channels).
+  Future<YtPage> browse(String browseId, {String? params}) async {
+    final json = await _post('browse', {'browseId': browseId, 'params': ?params});
+    return _page(json['contents']);
+  }
+
+  /// Videos from the channels the account follows, newest first.
+  Future<YtPage> subscriptions() => browse('FEsubscriptions');
+
+  /// YouTube's Music destination.
+  Future<YtPage> music() => _atLeast(browse(_musicChannel), () => search('official music video', params: _thisWeekByViews));
+
+  /// What's popular now. YouTube retired its Trending page, so this mixes
+  /// the destination channels (News, Sports, Live, Music) like Explore does.
+  Future<YtPage> trending(YtTrendingTopic topic) async {
+    if (topic != YtTrendingTopic.now) {
+      final page = browse(topic.channelId!);
+      return topic == YtTrendingTopic.gaming
+          ? _atLeast(page, () => search('gaming', params: _thisWeekByViews))
+          : page;
+    }
+    final pages = await Future.wait([
+      for (final id in [YtTrendingTopic.news.channelId!, YtTrendingTopic.sports.channelId!, _musicChannel, YtTrendingTopic.live.channelId!])
+        browse(id).then<YtPage?>((p) => p).catchError((Object _) => null),
+    ]);
+    final lists = [for (final p in pages) if (p != null) p.items.where((v) => !v.isShort).toList()];
+    if (lists.isEmpty) throw const YtException('Couldn\'t load what\'s trending.');
+    final seen = <String>{};
+    final mixed = <YtVideo>[];
+    for (var i = 0; lists.any((l) => i < l.length); i++) {
+      for (final l in lists) {
+        if (i < l.length && seen.add(l[i].id)) mixed.add(l[i]);
+      }
+    }
+    return YtPage(items: mixed);
+  }
+
+  /// Sort by views, uploaded this week, videos only.
+  static const _thisWeekByViews = 'CAMSBAgDEAE%3D';
+  static const _musicChannel = 'UC-9-kyTW8ZkZNDHQJ6FgpwQ';
+
+  /// [primary], topped up from [fallback] when it brings back too little.
+  static Future<YtPage> _atLeast(Future<YtPage> primary, Future<YtPage> Function() fallback, {int min = 8}) async {
+    YtPage? first;
+    try {
+      first = await primary;
+      if (first.items.length >= min) return first;
+    } catch (_) {}
+    try {
+      final extra = await fallback();
+      final seen = <String>{};
+      return YtPage(
+        items: [...?first?.items, ...extra.items].where((v) => seen.add(v.id)).toList(),
+        continuation: first?.continuation ?? extra.continuation,
+      );
+    } catch (_) {
+      if (first != null) return first;
+      rethrow;
+    }
+  }
+
+  /// Search suggestions for what's typed so far (empty on any failure).
+  Future<List<String>> suggestions(String query) async {
+    final q = query.trim();
+    if (q.isEmpty) return const [];
+    try {
+      final uri = Uri.https('suggestqueries.google.com', '/complete/search', {
+        'client': 'firefox',
+        'ds': 'yt',
+        'hl': 'en',
+        'ie': 'utf-8',
+        'oe': 'utf-8',
+        'q': q,
+      });
+      final req = await _http.getUrl(uri);
+      req.headers.set(HttpHeaders.userAgentHeader, WebSession.desktopUserAgent);
+      final res = await req.close().timeout(const Duration(seconds: 6));
+      final body = await res.transform(const Utf8Decoder(allowMalformed: true)).join();
+      if (res.statusCode != 200) return const [];
+      return parseSuggestions(body);
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  @visibleForTesting
+  static List<String> parseSuggestions(String body) {
+    try {
+      final data = jsonDecode(body);
+      if (data is! List || data.length < 2 || data[1] is! List) return const [];
+      return [
+        for (final s in data[1] as List)
+          if (s is String && s.trim().isNotEmpty) s.trim()
+          else if (s is List && s.isNotEmpty && s.first is String) (s.first as String).trim(),
+      ].take(10).toList();
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  /// Channels the account follows, most relevant first.
+  Future<List<YtChannel>> subscribedChannels() async {
+    final json = await _post('browse', {'browseId': 'FEchannels'});
+    final out = <YtChannel>[];
+    final seen = <String>{};
+    for (final key in const ['channelRenderer', 'gridChannelRenderer']) {
+      for (final c in _all(json['contents'], key)) {
+        final id = c['channelId'];
+        final name = _text(c['title']);
+        if (id is! String || name == null || !seen.add(id)) continue;
+        // On this page `subscriberCountText` often holds the @handle.
+        final a = _text(c['subscriberCountText']);
+        final b = _text(c['videoCountText']);
+        out.add(YtChannel(
+          id: id,
+          name: name,
+          avatar: _thumb(c['thumbnail']),
+          handle: a != null && a.startsWith('@') ? a : null,
+          subscribers: [a, b].whereType<String>().firstWhere((t) => t.contains('subscriber'), orElse: () => '').nullIfEmpty,
+          subscribed: true,
+        ));
+      }
+    }
+    return out;
+  }
+
+  /// A channel's header and uploads.
+  Future<YtChannelPage> channel(String channelId) async {
+    final home = await _post('browse', {'browseId': channelId});
+    final tabs = {
+      for (final t in _all(home['contents'], 'tabRenderer'))
+        _tabName(t): _dig(t, ['endpoint', 'browseEndpoint', 'params']) as String?,
+    };
+    _postsParams ??= tabs['posts'];
+    final header = _channelHeader(channelId, home);
+    YtPage videos = _page(home['contents']);
+    final videosParams = tabs['videos'];
+    if (videosParams != null) {
+      try {
+        videos = await browse(channelId, params: videosParams);
+      } catch (_) {}
+    }
+    return YtChannelPage(channel: header, videos: videos, postsParams: tabs['posts']);
+  }
+
+  /// Posts tab params, learnt from the first channel page opened.
+  static String? _postsParams;
+  static const _defaultPostsParams = 'EgVwb3N0c_IGBAoCSgA%3D';
+
+  static String _tabName(Map tab) {
+    final url = '${_dig(tab, ['endpoint', 'commandMetadata', 'webCommandMetadata', 'url']) ?? ''}';
+    final last = url.split('/').last.toLowerCase();
+    if (last == 'community') return 'posts';
+    if (last.isNotEmpty) return last;
+    return '${tab['title'] ?? ''}'.toLowerCase();
+  }
+
+  /// One channel's posts.
+  Future<List<YtPost>> channelPosts(String channelId, {String? params}) async {
+    final json = await _post('browse', {'browseId': channelId, 'params': params ?? _postsParams ?? _defaultPostsParams});
+    return parsePosts(json['contents']);
+  }
+
+  /// Recent posts of the first [channels] the account follows, newest first.
+  Future<List<YtPost>> subscriptionPosts(List<YtChannel> channels, {int max = 10}) async {
+    final picked = channels.take(max).toList();
+    final results = <List<YtPost>>[];
+    // A few at a time: YouTube rate-limits bursts.
+    for (var i = 0; i < picked.length; i += 4) {
+      final batch = picked.skip(i).take(4);
+      results.addAll(await Future.wait(
+        batch.map((c) => channelPosts(c.id).catchError((Object _) => const <YtPost>[])),
+      ));
+    }
+    final seen = <String>{};
+    final all = [for (final l in results) ...l.take(6)].where((p) => seen.add(p.id)).toList()
+      ..sort((a, b) => a.age.compareTo(b.age));
+    return all;
+  }
+
+  /// Follows or unfollows a channel.
+  Future<void> setSubscribed(String channelId, bool subscribe) async {
+    await _post(subscribe ? 'subscription/subscribe' : 'subscription/unsubscribe', {
+      'channelIds': [channelId],
+      'params': subscribe ? 'EgIIAhgA' : 'CgIIAhgA',
+    });
   }
 
   /// Next page of a home feed, search or related list.
@@ -218,28 +406,104 @@ class YouTubeClient {
     String? views;
     String? published;
     String? title;
+    String? likes;
     if (primary is Map) {
       title = _text(primary['title']);
       final vc = _dig(primary, ['viewCount', 'videoViewCountRenderer']);
       views = _text(vc?['viewCount']) ?? _text(vc?['shortViewCount']);
       published = _text(primary['relativeDateText']) ?? _text(primary['dateText']);
+      final entity = _first(primary, 'likeCountEntity');
+      likes = entity is Map ? _text(entity['likeCountIfIndifferent']) : null;
+      if (likes == null) {
+        final like = _first(primary, 'likeButtonViewModel');
+        final t = _first(like, 'title');
+        if (t is String && RegExp(r'\d').hasMatch(t)) likes = t;
+      }
     }
     String? description;
     if (secondary is Map) {
       description = _text(secondary['attributedDescription']) ?? _text(secondary['description']);
     }
+    final sub = secondary is Map ? _first(secondary['subscribeButton'], 'subscribeButtonRenderer') : null;
+    var channelId = _dig(owner, ['navigationEndpoint', 'browseEndpoint', 'browseId']);
+    if (channelId is! String && sub is Map) channelId = sub['channelId'];
     return YtWatchInfo(
       id: id,
       title: title ?? 'YouTube video',
       channel: _text(owner?['title']),
+      channelId: channelId is String ? channelId : null,
       channelAvatar: _thumb(owner?['thumbnail']),
       subscribers: _text(owner?['subscriberCountText']),
+      subscribed: _subscribedState(data, sub),
       views: views,
       published: published,
+      likes: likes,
       description: description,
       related: related.items.where((v) => v.id != id).toList(),
       relatedContinuation: related.continuation,
     );
+  }
+
+  /// `subscribed` from the classic button, else from the entity store.
+  static bool? _subscribedState(Map<String, dynamic> data, dynamic button) {
+    if (button is Map && button['subscribed'] is bool) return button['subscribed'] as bool;
+    final entity = _first(data['frameworkUpdates'], 'subscriptionStateEntity');
+    if (entity is Map && entity['subscribed'] is bool) return entity['subscribed'] as bool;
+    return null;
+  }
+
+  @visibleForTesting
+  static YtChannel parseChannelHeader(String channelId, Map<String, dynamic> data) => _channelHeader(channelId, data);
+
+  static YtChannel _channelHeader(String channelId, Map<String, dynamic> data) {
+    final meta = _dig(data, ['metadata', 'channelMetadataRenderer']);
+    final header = data['header'];
+    final model = _first(header, 'pageHeaderViewModel');
+    final classic = _first(header, 'c4TabbedHeaderRenderer');
+    final parts = <String>[
+      for (final p in _all(_first(model, 'contentMetadataViewModel'), 'text')) ?_text(p),
+    ];
+    final name = _text(meta?['title']) ?? _text(_dig(model, ['title', 'dynamicTextViewModel', 'text'])) ?? _text(classic?['title']);
+    return YtChannel(
+      id: (meta?['externalId'] as String?) ?? channelId,
+      name: name ?? 'Channel',
+      avatar: _thumb(meta?['avatar']) ?? _sources(_first(model, 'avatarViewModel')) ?? _thumb(classic?['avatar']),
+      handle: parts.firstWhere((p) => p.startsWith('@'), orElse: () => '').nullIfEmpty ?? _text(classic?['channelHandleText']),
+      subscribers: parts.firstWhere((p) => p.contains('subscriber'), orElse: () => '').nullIfEmpty ??
+          _text(classic?['subscriberCountText']),
+      banner: _sources(_first(model, 'imageBannerViewModel')) ?? _thumb(classic?['banner']),
+      subscribed: _subscribedState(data, _first(header, 'subscribeButtonRenderer')),
+    );
+  }
+
+  @visibleForTesting
+  static List<YtPost> parsePosts(dynamic root) {
+    final out = <YtPost>[];
+    final seen = <String>{};
+    for (final p in _all(root, 'backstagePostRenderer')) {
+      final id = p['postId'];
+      final author = _text(p['authorText']);
+      if (id is! String || author == null || !seen.add(id)) continue;
+      final attachment = p['backstageAttachment'];
+      final images = <String>[
+        for (final img in _all(attachment, 'backstageImageRenderer')) ?_thumb(img['image']),
+      ];
+      YtVideo? video;
+      final vr = _first(attachment, 'videoRenderer');
+      if (vr != null) video = _videoRenderer(vr);
+      out.add(YtPost(
+        id: id,
+        author: author,
+        authorAvatar: _thumb(p['authorThumbnail']),
+        channelId: _dig(p, ['authorEndpoint', 'browseEndpoint', 'browseId']) as String?,
+        text: _text(p['contentText']),
+        published: _text(p['publishedTimeText']),
+        likes: _text(p['voteCount']),
+        images: images,
+        video: video,
+      ));
+    }
+    return out;
   }
 
   // ───── Walking YouTube's renderer tree ─────
@@ -498,6 +762,20 @@ class YouTubeClient {
 
 enum YtFeedKind { home, search, related }
 
+/// Chips on the Trending tab, backed by YouTube's destination channels.
+enum YtTrendingTopic {
+  now('Now', null),
+  news('News', 'UCYfdidRxbB8Qhf0Nx7ioOYw'),
+  sports('Sports', 'UCEgdi0XIXXZ-qJOFPf4JSKw'),
+  live('Live', 'UC4R8DWoMoI7CAwX8_LjQHig'),
+  gaming('Gaming', 'UCOpNcN46UbXVtpKMrmU4Abg');
+
+  const YtTrendingTopic(this.label, this.channelId);
+
+  final String label;
+  final String? channelId;
+}
+
 /// Request context from youtube.com's `ytcfg`.
 class _Session {
   _Session({
@@ -584,4 +862,8 @@ Map<String, dynamic>? extractJsonObject(String source, int start) {
     }
   }
   return null;
+}
+
+extension on String {
+  String? get nullIfEmpty => isEmpty ? null : this;
 }

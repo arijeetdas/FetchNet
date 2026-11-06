@@ -12,13 +12,17 @@ import '../models/media_info.dart';
 import 'history_store.dart';
 import 'storage_service.dart';
 
+/// Extra yt-dlp arguments a download gets from the user's settings.
+typedef DownloadArgsProvider = List<String> Function(MediaInfo info, DownloadOption option);
+
 /// Queues and runs downloads, tracks their progress and records history.
 class DownloadManager extends ChangeNotifier {
-  DownloadManager({required this.engine, required this.storage, required this.history});
+  DownloadManager({required this.engine, required this.storage, required this.history, this.extraArgs});
 
   final YtDlpEngine engine;
   final StorageService storage;
   final HistoryStore history;
+  final DownloadArgsProvider? extraArgs;
 
   static const _maxConcurrent = 3;
 
@@ -63,6 +67,7 @@ class DownloadManager extends ChangeNotifier {
       fileBaseName: fileBaseName,
       option: option,
       requestArgs: info.requestArgs,
+      extraArgs: option.directUrl != null ? const [] : (extraArgs?.call(info, option) ?? const []),
       thumbnail: info.thumbnail,
       extractor: info.extractor,
     );
@@ -80,6 +85,7 @@ class DownloadManager extends ChangeNotifier {
       fileBaseName: storage.uniqueBaseName(failed.fileBaseName, alsoTaken: reservedNames),
       option: failed.option,
       requestArgs: failed.requestArgs,
+      extraArgs: failed.extraArgs,
       thumbnail: failed.thumbnail,
       extractor: failed.extractor,
     );
@@ -159,9 +165,47 @@ class DownloadManager extends ChangeNotifier {
       return;
     }
     final temp = await storage.workDir('parts/${task.id}');
+    var extra = task.extraArgs;
 
+    // Cover art is a nice-to-have: when embedding it fails (a format or
+    // platform without support), the download runs once more without it.
+    while (true) {
+      final result = await _runYtDlp(task, dir, temp, extra);
+      if (!result.ok && !result.cancelled && task.stage != 'Cancelling…' && extra.isNotEmpty) {
+        final err = (result.stderr.isEmpty ? result.stdout : result.stderr).toLowerCase();
+        if (err.contains('thumbnail')) {
+          extra = const [];
+          task
+            ..partIndex = 0
+            ..lastPartBytes = 0
+            ..progress = null
+            ..stage = 'Retrying without cover art…';
+          notifyListeners();
+          continue;
+        }
+      }
+      unawaited(_cleanup(temp));
+      if (result.cancelled || task.stage == 'Cancelling…') {
+        task.status = DownloadStatus.cancelled;
+        _tasks.remove(task);
+        await _record(task);
+        _finishNotification(task);
+      } else if (result.ok) {
+        await _complete(task, dir);
+      } else {
+        final message = extractEngineError(result.stderr.isEmpty ? result.stdout : result.stderr);
+        _fail(task, message);
+      }
+      break;
+    }
+    notifyListeners();
+    _pump();
+  }
+
+  Future<EngineResult> _runYtDlp(DownloadTask task, String dir, Directory temp, List<String> extra) async {
     final args = <String>[
       ...task.option.formatArgs,
+      ...extra,
       ...task.requestArgs,
       '--no-playlist',
       '--no-mtime',
@@ -186,21 +230,7 @@ class DownloadManager extends ChangeNotifier {
     final result = await run.done;
     await sub.cancel();
     _runs.remove(task.id);
-    unawaited(_cleanup(temp));
-
-    if (result.cancelled || task.stage == 'Cancelling…') {
-      task.status = DownloadStatus.cancelled;
-      _tasks.remove(task);
-      await _record(task);
-      _finishNotification(task);
-    } else if (result.ok) {
-      await _complete(task, dir);
-    } else {
-      final message = extractEngineError(result.stderr.isEmpty ? result.stdout : result.stderr);
-      _fail(task, message);
-    }
-    notifyListeners();
-    _pump();
+    return result;
   }
 
   /// Saves [DownloadOption.directUrl] straight into the download folder.
@@ -299,6 +329,7 @@ class DownloadManager extends ChangeNotifier {
         'FFmpegExtractAudio' => 'Converting audio…',
         'VideoConvertor' || 'FFmpegVideoConvertor' || 'VideoRemuxer' || 'FFmpegVideoRemuxer' => 'Converting video…',
         'Metadata' || 'FFmpegMetadata' => 'Adding metadata…',
+        'EmbedThumbnail' || 'ThumbnailsConvertor' || 'FFmpegThumbnailsConvertor' => 'Adding cover art…',
         'MoveFiles' || 'MoveFilesAfterDownload' => 'Saving…',
         'FixupM3u8' || 'FFmpegFixupM3u8' || 'FixupM4a' || 'FFmpegFixupM4a' => 'Finishing up…',
         _ => 'Processing…',
@@ -387,6 +418,8 @@ class DownloadManager extends ChangeNotifier {
     if (force || now.difference(_lastNotify) > const Duration(milliseconds: 250)) {
       _lastNotify = now;
       _notifyTimer?.cancel();
+      // Cleared, or `??=` below would never schedule another update.
+      _notifyTimer = null;
       notifyListeners();
       _syncNotifications();
     } else {

@@ -22,14 +22,19 @@ class FetchService {
 
   final YtDlpEngine _engine;
   final CookieArgsProvider? cookieArgs;
-  String? _currentId;
+
+  /// yt-dlp runs in flight; several fetches may overlap.
+  final Set<String> _running = {};
+
+  /// Bumped by [cancel]: fetches started before it give up.
   int _generation = 0;
+  int _seq = 0;
 
   /// Fetches anonymously first. When that fails and the browser holds a
   /// sign-in for the site, tries once more with its cookies (age-restricted,
   /// private or bot-checked media).
   Future<MediaInfo> fetch(String url, {List<String> requestArgs = const []}) async {
-    final generation = ++_generation;
+    final generation = _generation;
     try {
       return await _fetchOnce(url, requestArgs);
     } on FetchException catch (e) {
@@ -52,8 +57,8 @@ class FetchService {
   }
 
   Future<MediaInfo> _fetchOnce(String url, List<String> requestArgs) async {
-    final id = 'info-${DateTime.now().microsecondsSinceEpoch}';
-    _currentId = id;
+    final id = 'info-${DateTime.now().microsecondsSinceEpoch}-${_seq++}';
+    _running.add(id);
     final result = await _engine.run([
       '-J',
       '--no-playlist',
@@ -63,8 +68,7 @@ class FetchService {
       '--',
       url,
     ], id: id);
-    final wasCancelled = _currentId != id;
-    if (_currentId == id) _currentId = null;
+    final wasCancelled = !_running.remove(id);
 
     if (wasCancelled || result.cancelled) throw FetchException('Cancelled', cancelled: true);
     if (!result.ok || result.stdout.trim().isEmpty) {
@@ -78,10 +82,11 @@ class FetchService {
     }
   }
 
+  /// Cancels every fetch in flight.
   Future<void> cancel() async {
     _generation++;
-    final id = _currentId;
-    _currentId = null;
-    if (id != null) await _engine.cancel(id);
+    final ids = _running.toList();
+    _running.clear();
+    await Future.wait(ids.map(_engine.cancel));
   }
 }

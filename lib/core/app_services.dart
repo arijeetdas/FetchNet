@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../engine/engine.dart';
+import '../services/cover_art.dart';
 import '../services/download_manager.dart';
 import '../services/fetch_service.dart';
 import '../services/history_store.dart';
@@ -12,6 +13,7 @@ import '../services/update_service.dart';
 import '../services/web_session.dart';
 import '../services/youtube_client.dart';
 import '../services/youtube_service.dart';
+import '../services/youtube_streams.dart';
 import 'app_prefs.dart';
 import 'platform/native_bridge.dart';
 
@@ -26,14 +28,16 @@ class AppServices {
     required this.fetcher,
     required this.youtube,
     required this.sites,
+    required this.youtubeStreams,
   })  : themeMode = ValueNotifier(prefs.themeMode),
         showAnimations = ValueNotifier(prefs.showAnimations);
 
-  factory AppServices.create(AppPrefs prefs) {
+  /// [youtubeClient] lets tests feed YouTube data without the network.
+  factory AppServices.create(AppPrefs prefs, {YouTubeClient? youtubeClient}) {
     final engine = YtDlpEngine.create(prefs);
     final storage = StorageService();
     final history = HistoryStore(prefs);
-    final youtube = YouTubeService(prefs, YouTubeClient());
+    final youtube = YouTubeService(prefs, youtubeClient ?? YouTubeClient());
 
     // The browser's cookies for a link, offered to yt-dlp when an anonymous
     // fetch fails. YouTube only when the user signed in with Google.
@@ -48,10 +52,24 @@ class AppServices {
       engine: engine,
       storage: storage,
       history: history,
-      downloads: DownloadManager(engine: engine, storage: storage, history: history),
+      downloads: DownloadManager(
+        engine: engine,
+        storage: storage,
+        history: history,
+        // YouTube Settings → cover art for audio downloads.
+        extraArgs: (info, option) => coverArtArgs(
+          info,
+          option,
+          ffmpeg: engine.status.value.ffmpegAvailable,
+          music: youtube.musicCoverArt,
+          video: youtube.videoCoverArt,
+        ),
+      ),
       fetcher: FetchService(engine, cookieArgs: cookieArgs),
       youtube: youtube,
       sites: SitesService(prefs, engine),
+      // Its own fetcher, so playback never cancels a fetch on the Home tab.
+      youtubeStreams: YtStreamResolver(() => FetchService(engine, cookieArgs: cookieArgs), engine),
     );
   }
 
@@ -63,6 +81,9 @@ class AppServices {
   final FetchService fetcher;
   final YouTubeService youtube;
   final SitesService sites;
+
+  /// Playable YouTube streams from yt-dlp (watch page, downloads).
+  final YtStreamResolver youtubeStreams;
   final UpdateService updates = UpdateService();
   final ValueNotifier<ThemeMode> themeMode;
 
@@ -75,6 +96,24 @@ class AppServices {
 
   /// Lets any screen switch the main tab (0 = Home, 1 = Downloads, ...).
   final ValueNotifier<int> tabRequest = ValueNotifier(0);
+
+  /// The app's navigator, to close pushed screens when a notification or an
+  /// app shortcut opens a tab.
+  final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
+
+  /// `open_downloads` / `open_history` / `open_settings` (notifications,
+  /// Android app shortcuts).
+  void _openTab(String? action) {
+    final index = switch (action) {
+      'open_downloads' => 1,
+      'open_history' => 2,
+      'open_settings' => 3,
+      _ => null,
+    };
+    if (index == null) return;
+    navigatorKey.currentState?.popUntil((r) => r.isFirst);
+    tabRequest.value = index;
+  }
 
   bool _started = false;
 
@@ -94,15 +133,15 @@ class AppServices {
       tabRequest.value = 0;
     });
 
-    // Download notifications: Cancel, or tap to open the Downloads tab.
-    if (await NativeBridge.consumeLaunchAction() == 'open_downloads') tabRequest.value = 1;
+    // Download notifications (Cancel, tap → Downloads) and app shortcuts.
+    _openTab(await NativeBridge.consumeLaunchAction());
     NativeBridge.notificationActions().listen((event) {
       switch (event['action']) {
         case 'cancel':
           final id = event['id'];
           if (id != null) downloads.cancelById(id);
-        case 'open_downloads':
-          tabRequest.value = 1;
+        case final String action:
+          _openTab(action);
       }
     });
   }

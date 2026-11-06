@@ -18,6 +18,7 @@ class FetchNetApp extends StatelessWidget {
         valueListenable: services.themeMode,
         builder: (context, mode, _) => MaterialApp(
           title: 'FetchNet',
+          navigatorKey: services.navigatorKey,
           debugShowCheckedModeBanner: false,
           themeMode: mode,
           theme: AppTheme.light(),

@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="shortcut_downloads">Downloads</string>
+    <string name="shortcut_downloads_long">Open Downloads</string>
+    <string name="shortcut_history">History</string>
+    <string name="shortcut_history_long">Open History</string>
+    <string name="shortcut_settings">Settings</string>
+    <string name="shortcut_settings_long">Open Settings</string>
+</resources>

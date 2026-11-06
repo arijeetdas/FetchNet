@@ -20,6 +20,11 @@ class AppPrefs {
   static const _kYtThumbnails = 'youtube.thumbnail_downloads';
   static const _kYtTags = 'youtube.show_tags';
   static const _kYtAccount = 'youtube.account';
+  static const _kYtSearchHistory = 'youtube.search_history';
+  static const _kYtAutoplay = 'youtube.autoplay';
+  static const _kYtQuality = 'youtube.quality';
+  static const _kYtMusicCover = 'youtube.music_cover_art';
+  static const _kYtVideoCover = 'youtube.video_cover_art';
   static const _kSites = 'home.sites';
   static const _kExtractors = 'engine.extractors';
   static const _kExtractorsVersion = 'engine.extractors_version';
@@ -62,6 +67,26 @@ class AppPrefs {
 
   bool get youtubeShowTags => _prefs.getBool(_kYtTags) ?? false;
   Future<void> setYoutubeShowTags(bool value) => _prefs.setBool(_kYtTags, value);
+
+  /// Recent YouTube searches, newest first.
+  List<String> get youtubeSearchHistory => _prefs.getStringList(_kYtSearchHistory) ?? const [];
+  Future<void> setYoutubeSearchHistory(List<String> value) => _prefs.setStringList(_kYtSearchHistory, value);
+
+  /// Play the first "Up next" video when one ends.
+  bool get youtubeAutoplay => _prefs.getBool(_kYtAutoplay) ?? true;
+  Future<void> setYoutubeAutoplay(bool value) => _prefs.setBool(_kYtAutoplay, value);
+
+  /// Preferred playback height (e.g. 720); 0 picks automatically.
+  int get youtubeQuality => _prefs.getInt(_kYtQuality) ?? 0;
+  Future<void> setYoutubeQuality(int value) => _prefs.setInt(_kYtQuality, value);
+
+  /// music.youtube.com audio downloads get the square album cover embedded.
+  bool get youtubeMusicCoverArt => _prefs.getBool(_kYtMusicCover) ?? true;
+  Future<void> setYoutubeMusicCoverArt(bool value) => _prefs.setBool(_kYtMusicCover, value);
+
+  /// Audio downloads of YouTube videos get the thumbnail as cover art.
+  bool get youtubeVideoCoverArt => _prefs.getBool(_kYtVideoCover) ?? true;
+  Future<void> setYoutubeVideoCoverArt(bool value) => _prefs.setBool(_kYtVideoCover, value);
 
   /// Last known Google account profile (JSON), shown while offline.
   String? get youtubeAccountJson => _prefs.getString(_kYtAccount);

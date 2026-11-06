@@ -38,6 +38,14 @@ class DownloadsScreen extends StatelessWidget {
               ),
           ],
           slivers: [
+            // First, like History and Settings: downloads starting and
+            // finishing below it never push it around.
+            const SliverToBoxAdapter(
+              child: Padding(
+                padding: EdgeInsets.only(top: 10, bottom: 6),
+                child: Center(child: DownloadsMotion()),
+              ),
+            ),
             if (tasks.isNotEmpty) ...[
               _SectionHeader(title: 'In progress', count: tasks.where((t) => t.isActive).length),
               SliverList.separated(
@@ -46,13 +54,6 @@ class DownloadsScreen extends StatelessWidget {
                 itemBuilder: (context, i) => _TaskCard(task: tasks[i]),
               ),
             ],
-            // Above "Saved" (or the empty state), below anything in progress.
-            const SliverToBoxAdapter(
-              child: Padding(
-                padding: EdgeInsets.only(top: 18),
-                child: Center(child: DownloadsMotion()),
-              ),
-            ),
             if (files.isNotEmpty) ...[
               _SectionHeader(title: 'Saved', count: files.length),
               SliverGrid(

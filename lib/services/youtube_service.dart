@@ -68,6 +68,55 @@ class YouTubeService extends ChangeNotifier {
     notifyListeners();
   }
 
+  bool get musicCoverArt => _prefs.youtubeMusicCoverArt;
+  Future<void> setMusicCoverArt(bool value) async {
+    await _prefs.setYoutubeMusicCoverArt(value);
+    notifyListeners();
+  }
+
+  bool get videoCoverArt => _prefs.youtubeVideoCoverArt;
+  Future<void> setVideoCoverArt(bool value) async {
+    await _prefs.setYoutubeVideoCoverArt(value);
+    notifyListeners();
+  }
+
+  bool get autoplay => _prefs.youtubeAutoplay;
+  Future<void> setAutoplay(bool value) async {
+    await _prefs.setYoutubeAutoplay(value);
+    notifyListeners();
+  }
+
+  /// Preferred playback height; 0 = automatic.
+  int get quality => _prefs.youtubeQuality;
+  Future<void> setQuality(int value) async {
+    await _prefs.setYoutubeQuality(value);
+    notifyListeners();
+  }
+
+  // ───── Search history ─────
+
+  static const _maxHistory = 30;
+
+  List<String> get searchHistory => _prefs.youtubeSearchHistory;
+
+  Future<void> rememberSearch(String query) async {
+    final q = query.trim();
+    if (q.isEmpty) return;
+    final list = [q, ...searchHistory.where((e) => e.toLowerCase() != q.toLowerCase())].take(_maxHistory).toList();
+    await _prefs.setYoutubeSearchHistory(list);
+    notifyListeners();
+  }
+
+  Future<void> forgetSearch(String query) async {
+    await _prefs.setYoutubeSearchHistory(searchHistory.where((e) => e != query).toList());
+    notifyListeners();
+  }
+
+  Future<void> clearSearchHistory() async {
+    await _prefs.setYoutubeSearchHistory(const []);
+    notifyListeners();
+  }
+
   // ───── Session ─────
 
   /// Whether the browser holds a signed-in YouTube session.

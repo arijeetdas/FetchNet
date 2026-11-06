@@ -132,6 +132,31 @@ class _YouTubeSettingsScreenState extends State<YouTubeSettingsScreen> {
                         subtitle: const Text('Lists a video\'s tags under the Download button, with a button to copy '
                             'them all. YouTube videos only.'),
                       ),
+                      const Divider(height: 12),
+                      SwitchListTile(
+                        contentPadding: EdgeInsets.zero,
+                        secondary: const _TileIcon(Icons.image_aspect_ratio_rounded),
+                        value: youtube.videoCoverArt,
+                        onChanged: youtube.setVideoCoverArt,
+                        title: const Text('Thumbnail as cover art'),
+                        subtitle: const Text('Audio downloads of YouTube videos get the video\'s thumbnail as their '
+                            'cover art. MP3 and M4A; needs FFmpeg.'),
+                      ),
+                    ],
+                  ),
+                  const SectionLabel('YouTube Music'),
+                  SettingsCard(
+                    padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 6),
+                    children: [
+                      SwitchListTile(
+                        contentPadding: EdgeInsets.zero,
+                        secondary: const _TileIcon(Icons.album_rounded),
+                        value: youtube.musicCoverArt,
+                        onChanged: youtube.setMusicCoverArt,
+                        title: const Text('Album cover art'),
+                        subtitle: const Text('Audio downloads from music.youtube.com links get the song\'s square '
+                            'album cover built into the file, so music players show it. MP3 and M4A; needs FFmpeg.'),
+                      ),
                     ],
                   ),
                 ],

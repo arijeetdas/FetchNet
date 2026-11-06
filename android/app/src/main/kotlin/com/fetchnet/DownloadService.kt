@@ -27,7 +27,11 @@ class DownloadService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val pinned = DownloadNotifier.pinnedNotification(this)
         if (pinned == null) {
-            stopSelf()
+            // Everything finished before the service got going. A service
+            // started with startForegroundService() must still call
+            // startForeground(), or Android kills the app.
+            pin(PLACEHOLDER_ID, DownloadNotifier.placeholder(this))
+            release()
             return START_NOT_STICKY
         }
         pin(pinned.first, pinned.second)
@@ -48,9 +52,12 @@ class DownloadService : Service() {
         }
     }
 
-    /** Detaches (keeps) the current notification and stops the service. */
+    /**
+     * Lets go of the live notification (removing it) and stops. The finished
+     * notification is posted separately under its own id.
+     */
     fun release() {
-        ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_DETACH)
+        ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
         stopSelf()
     }
 
@@ -65,6 +72,8 @@ class DownloadService : Service() {
     }
 
     companion object {
+        private const val PLACEHOLDER_ID = 40999
+
         @Volatile var instance: DownloadService? = null
             private set
 

@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- App shortcuts: dark theme. -->
+    <color name="shortcut_background">#2A1D44</color>
+    <color name="shortcut_glyph">#D0BCFF</color>
+</resources>

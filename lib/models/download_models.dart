@@ -11,6 +11,7 @@ class DownloadTask {
     required this.fileBaseName,
     required this.option,
     required this.requestArgs,
+    this.extraArgs = const [],
     this.thumbnail,
     this.extractor,
   }) : createdAt = DateTime.now();
@@ -21,6 +22,9 @@ class DownloadTask {
   final String fileBaseName;
   final DownloadOption option;
   final List<String> requestArgs;
+
+  /// Post-processing picked from settings (e.g. embedded cover art).
+  final List<String> extraArgs;
   final String? thumbnail;
   final String? extractor;
   final DateTime createdAt;

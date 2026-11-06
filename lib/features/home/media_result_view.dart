@@ -12,9 +12,15 @@ import '../../widgets/brand.dart';
 import 'rename_dialog.dart';
 
 class MediaResultView extends StatefulWidget {
-  const MediaResultView({super.key, required this.info});
+  const MediaResultView({super.key, required this.info, this.framed = true, this.onQueued});
 
   final MediaInfo info;
+
+  /// Draw the card around it (off inside sheets that have their own surface).
+  final bool framed;
+
+  /// Called once a download was queued (e.g. to close a popup).
+  final VoidCallback? onQueued;
 
   @override
   State<MediaResultView> createState() => _MediaResultViewState();
@@ -50,13 +56,19 @@ class _MediaResultViewState extends State<MediaResultView> {
     if (name == null || !mounted) return;
     await services.downloads.enqueue(info: widget.info, option: option, fileBaseName: name);
     if (!mounted) return;
+    // Works from screens pushed over the main tabs (YouTube) too.
+    final navigator = Navigator.of(context, rootNavigator: true);
     showSnack(
       context,
       'Downloading $name.${option.extension}',
       kind: ToastKind.success,
       actionLabel: 'View',
-      onAction: () => services.tabRequest.value = 1,
+      onAction: () {
+        navigator.popUntil((r) => r.isFirst);
+        services.tabRequest.value = 1;
+      },
     );
+    widget.onQueued?.call();
   }
 
   @override
@@ -109,6 +121,21 @@ class _MediaResultViewState extends State<MediaResultView> {
 
         return LayoutBuilder(builder: (context, c) {
           final twoColumn = c.maxWidth >= 820;
+          if (!widget.framed) {
+            return twoColumn
+                ? Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Expanded(flex: 5, child: header),
+                      const SizedBox(width: 24),
+                      Expanded(flex: 6, child: picker),
+                    ],
+                  )
+                : Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [header, const SizedBox(height: 18), picker],
+                  );
+          }
           return Card(
             clipBehavior: Clip.antiAlias,
             child: Padding(

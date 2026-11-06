@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- App shortcuts (long-press the app icon): light theme. -->
+    <color name="shortcut_background">#EDE4FF</color>
+    <color name="shortcut_glyph">#6D28D9</color>
+</resources>

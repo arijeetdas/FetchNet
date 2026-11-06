@@ -245,20 +245,7 @@ Downloads go to the public `Download/FetchNet` folder (created on first run). Ea
 
 ## 🤖 AI-assisted development
 
-FetchNet was built with **AI assistance**. **Claude** (by [Anthropic](https://www.anthropic.com)), working inside **Claude Code**, acted as a pair programmer, under the direction of the author, Arijeet Das, who decided:
-
-- **the product:** what FetchNet does, its features, the flows and the platform priorities;
-- **the design direction:** the violet-gradient identity, the onboarding, the navbar and the animations;
-- **acceptance:** testing builds on real devices and asking for fixes and refinements.
-
-The AI did the hands-on engineering work:
-
-- **Writing code:** most of the Dart and Kotlin.
-- **Research:** inspecting libraries before relying on them, for example disassembling youtubedl-android to confirm its API and which output lines its progress callback receives.
-- **Assets:** generating the app's vector icon assets.
-- **Tests:** writing the unit and integration tests.
-
-Nothing was taken on trust. Changes were checked with `flutter analyze`, unit tests, **real-network integration runs** (for example installing FFmpeg end to end, and reinstalling it while it was in use), rendered screenshots of the UI, and real builds. Several bugs were caught this way before they shipped, such as an isolate-messaging error that broke FFmpeg installs, and a velocity seam in the loading animation.
+FetchNet was built with **AI assistance**. **Claude** (by [Anthropic](https://www.anthropic.com)), working inside **Claude Code**, acted as a pair programmer, under the direction of the author, Arijeet Das.
 
 > [!NOTE]
 > AI assistance doesn't change the responsibility model: the [disclaimer](#%EF%B8%8F-disclaimer) applies in full.

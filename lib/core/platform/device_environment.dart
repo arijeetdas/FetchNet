@@ -16,7 +16,15 @@ class DeviceEnvironment {
   static List<String> _abis = const [];
   static String _installedApkType = 'universal';
   static int _sdkInt = 0;
+  static String? _pubspecVersionName;
+  static int? _pubspecBuildNumber;
   static bool _initialized = false;
+
+  /// Android: `version` / build number from pubspec.yaml, recorded at build
+  /// time by Gradle. Unlike the APK version code, split-per-ABI builds don't
+  /// inflate the build number. `null` elsewhere.
+  static String? get pubspecVersionName => _pubspecVersionName;
+  static int? get pubspecBuildNumber => _pubspecBuildNumber;
 
   /// True when this Android build runs on a Chromebook (ARC++ / ARCVM).
   static bool get isChromeOS => _isChromeOS;
@@ -48,15 +56,27 @@ class DeviceEnvironment {
     if (_initialized) return;
     _initialized = true;
     if (!isAndroid) return;
+    await _load(const Duration(seconds: 2));
+  }
+
+  /// Asks again when the startup query didn't answer in time (the update
+  /// link needs the device's ABIs).
+  static Future<void> ensureLoaded() async {
+    if (!isAndroid || _abis.isNotEmpty) return;
+    await _load(const Duration(seconds: 5));
+  }
+
+  static Future<void> _load(Duration timeout) async {
     try {
-      final result = await _channel
-          .invokeMapMethod<String, dynamic>('getDeviceEnvironment')
-          .timeout(const Duration(seconds: 2));
+      final result = await _channel.invokeMapMethod<String, dynamic>('getDeviceEnvironment').timeout(timeout);
       if (result == null) return;
       _isChromeOS = result['isChromeOS'] == true;
       _abis = (result['abis'] as List?)?.map((e) => e.toString()).toList() ?? const [];
       _installedApkType = (result['installedApkType']?.toString() ?? 'universal').trim();
       _sdkInt = (result['sdkInt'] as num?)?.toInt() ?? 0;
+      final name = result['pubspecVersionName']?.toString().trim();
+      _pubspecVersionName = (name == null || name.isEmpty || name == 'null') ? null : name;
+      _pubspecBuildNumber = (result['pubspecBuildNumber'] as num?)?.toInt();
     } catch (_) {
       // Unknown: behave like a regular Android device.
     }

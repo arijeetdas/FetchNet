@@ -19,6 +19,8 @@ class AppToast {
     String? actionLabel,
     VoidCallback? onAction,
     Duration? duration,
+    bool persistent = false,
+    int? countdownSeconds,
   }) {
     final overlay = Overlay.maybeOf(context, rootOverlay: true);
     if (overlay == null) return;
@@ -33,6 +35,8 @@ class AppToast {
         actionLabel: actionLabel,
         onAction: onAction,
         duration: duration ?? const Duration(seconds: 4),
+        persistent: persistent,
+        countdownSeconds: countdownSeconds,
         onDismissed: () {
           if (_entry == entry) {
             _entry = null;
@@ -56,6 +60,9 @@ class AppToast {
 
   /// Animates the current toast away, if any.
   static void dismiss() => _key?.currentState?._hide();
+
+  /// Whether a toast is on screen.
+  static bool get isShowing => _entry != null;
 }
 
 class _ToastView extends StatefulWidget {
@@ -67,6 +74,8 @@ class _ToastView extends StatefulWidget {
     required this.onDismissed,
     this.actionLabel,
     this.onAction,
+    this.persistent = false,
+    this.countdownSeconds,
   });
 
   final String message;
@@ -75,6 +84,12 @@ class _ToastView extends StatefulWidget {
   final VoidCallback onDismissed;
   final String? actionLabel;
   final VoidCallback? onAction;
+
+  /// Stays until [AppToast.dismiss] or its action; can't be swiped away.
+  final bool persistent;
+
+  /// Counts down next to the action label and runs the action at zero.
+  final int? countdownSeconds;
 
   @override
   State<_ToastView> createState() => _ToastViewState();
@@ -87,6 +102,8 @@ class _ToastViewState extends State<_ToastView> with SingleTickerProviderStateMi
     reverseDuration: const Duration(milliseconds: 220),
   );
   Timer? _timer;
+  Timer? _ticker;
+  int? _remaining;
   double _drag = 0;
   bool _hiding = false;
 
@@ -94,12 +111,25 @@ class _ToastViewState extends State<_ToastView> with SingleTickerProviderStateMi
   void initState() {
     super.initState();
     _c.forward();
-    _timer = Timer(widget.duration, _hide);
+    _remaining = widget.countdownSeconds;
+    if (_remaining != null) {
+      _ticker = Timer.periodic(const Duration(seconds: 1), (_) {
+        if (!mounted || _hiding) return;
+        setState(() => _remaining = _remaining! - 1);
+        if (_remaining! <= 0) {
+          _ticker?.cancel();
+          widget.onAction?.call();
+          _hide();
+        }
+      });
+    }
+    if (!widget.persistent) _timer = Timer(widget.duration, _hide);
   }
 
   @override
   void dispose() {
     _timer?.cancel();
+    _ticker?.cancel();
     _c.dispose();
     super.dispose();
   }
@@ -108,6 +138,7 @@ class _ToastViewState extends State<_ToastView> with SingleTickerProviderStateMi
     if (_hiding || !mounted) return;
     _hiding = true;
     _timer?.cancel();
+    _ticker?.cancel();
     await _c.reverse();
     widget.onDismissed();
   }
@@ -141,18 +172,22 @@ class _ToastViewState extends State<_ToastView> with SingleTickerProviderStateMi
             ),
           ),
           child: GestureDetector(
-            onTap: _hide,
-            onHorizontalDragUpdate: (d) => setState(() => _drag += d.delta.dx),
-            onHorizontalDragEnd: (d) {
-              if (_drag.abs() > 80 || d.primaryVelocity!.abs() > 600) {
-                _hide();
-              } else {
-                setState(() => _drag = 0);
-              }
-            },
-            onVerticalDragEnd: (d) {
-              if ((d.primaryVelocity ?? 0) < -200) _hide();
-            },
+            onTap: widget.persistent ? null : _hide,
+            onHorizontalDragUpdate: widget.persistent ? null : (d) => setState(() => _drag += d.delta.dx),
+            onHorizontalDragEnd: widget.persistent
+                ? null
+                : (d) {
+                    if (_drag.abs() > 80 || d.primaryVelocity!.abs() > 600) {
+                      _hide();
+                    } else {
+                      setState(() => _drag = 0);
+                    }
+                  },
+            onVerticalDragEnd: widget.persistent
+                ? null
+                : (d) {
+                    if ((d.primaryVelocity ?? 0) < -200) _hide();
+                  },
             child: ConstrainedBox(
               constraints: const BoxConstraints(maxWidth: 460),
               child: Material(
@@ -206,7 +241,9 @@ class _ToastViewState extends State<_ToastView> with SingleTickerProviderStateMi
                                 backgroundColor: scheme.primary.withValues(alpha: 0.12),
                                 shape: const StadiumBorder(),
                               ),
-                              child: Text(widget.actionLabel!),
+                              child: Text(
+                                _remaining == null ? widget.actionLabel! : '${widget.actionLabel!} · ${_remaining}s',
+                              ),
                             ),
                           ],
                         ],

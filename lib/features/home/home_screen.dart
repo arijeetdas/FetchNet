@@ -10,12 +10,19 @@ import '../../core/platform/device_environment.dart';
 import '../../engine/engine.dart';
 import '../../models/media_info.dart';
 import '../../services/fetch_service.dart';
+import '../../services/sites_service.dart';
+import '../../services/web_session.dart';
 import '../../widgets/app_dialog.dart';
 import '../../widgets/brand.dart';
+import '../../widgets/motion/living_logo.dart';
 import '../browser/browser_screen.dart';
 import '../shell/home_shell.dart';
+import '../shell/update_banner.dart';
+import '../youtube/youtube_screen.dart';
+import '../youtube/youtube_settings_screen.dart';
 import 'engine_banner.dart';
 import 'media_result_view.dart';
+import 'sites_panel.dart';
 
 enum _Phase { idle, loading, error, result }
 
@@ -139,6 +146,26 @@ class _HomeScreenState extends State<HomeScreen> {
     }
     final result = await Navigator.of(context)
         .push<BrowserGrab>(MaterialPageRoute(builder: (_) => BrowserScreen(initialUrl: url)));
+    await _handleGrab(result);
+  }
+
+  /// A site tile on the Sites panel.
+  Future<void> _openSite(Site site) async {
+    if (site.brand == SiteBrand.youtube) {
+      if (!BrowserScreen.isSupported) {
+        await _openBrowserMode(site.url);
+        return;
+      }
+      await _handleGrab(await openYouTube(context));
+      return;
+    }
+    await _openBrowserMode(site.url);
+  }
+
+  Future<void> _openYouTubeSettings() =>
+      Navigator.of(context).push(MaterialPageRoute(builder: (_) => const YouTubeSettingsScreen()));
+
+  Future<void> _handleGrab(BrowserGrab? result) async {
     if (result == null || !mounted) return;
     _controller.text = result.pageUrl;
     await _fetch(url: result.mediaUrl, requestArgs: result.requestArgs);
@@ -247,7 +274,11 @@ class _HomeScreenState extends State<HomeScreen> {
                 children: [
                   const _Hero(),
                   const SizedBox(height: 16),
+                  // App update first, then yt-dlp / add-on setup and updates.
+                  const UpdateBanner(),
                   const EngineBanner(),
+                  const Center(child: LivingLogo()),
+                  const SizedBox(height: 14),
                   Center(
                     child: ConstrainedBox(
                       constraints: const BoxConstraints(maxWidth: 720),
@@ -258,7 +289,6 @@ class _HomeScreenState extends State<HomeScreen> {
                         onFetch: () => _fetch(),
                         onPaste: _paste,
                         onClear: _clear,
-                        onBrowser: () => _openBrowserMode(),
                       ),
                     ),
                   ),
@@ -274,6 +304,9 @@ class _HomeScreenState extends State<HomeScreen> {
                         onRetry: () => _fetch(url: _lastUrl, requestArgs: _lastArgs),
                         onBrowser: () => _openBrowserMode(_lastUrl),
                         onCookies: DeviceEnvironment.isDesktop ? () => _useBrowserCookies(_lastUrl) : null,
+                        onYouTubeSignIn: isYouTubeUrl(_lastUrl) && !_services.youtube.signedIn && BrowserScreen.isSupported
+                            ? _openYouTubeSettings
+                            : null,
                       ),
                       _Phase.result =>
                         _info!.isPlaylist
@@ -300,6 +333,13 @@ class _HomeScreenState extends State<HomeScreen> {
                         ),
                       ),
                     ),
+                  const SizedBox(height: 20),
+                  Center(
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(maxWidth: 720),
+                      child: SitesPanel(onOpen: _openSite, onBrowser: () => _openBrowserMode()),
+                    ),
+                  ),
                 ],
               ),
             ),
@@ -378,7 +418,6 @@ class _LinkCard extends StatelessWidget {
     required this.onFetch,
     required this.onPaste,
     required this.onClear,
-    required this.onBrowser,
   });
 
   final TextEditingController controller;
@@ -387,7 +426,6 @@ class _LinkCard extends StatelessWidget {
   final VoidCallback onFetch;
   final VoidCallback onPaste;
   final VoidCallback onClear;
-  final VoidCallback onBrowser;
 
   @override
   Widget build(BuildContext context) {
@@ -426,15 +464,6 @@ class _LinkCard extends StatelessWidget {
               expand: true,
               onPressed: canFetch ? onFetch : null,
             );
-            final browser = OutlinedButton.icon(
-              onPressed: loading ? null : onBrowser,
-              icon: const Icon(Icons.travel_explore_rounded),
-              label: const Text('Open in Browser Mode'),
-              style: OutlinedButton.styleFrom(
-                minimumSize: const Size(double.infinity, 52),
-                side: BorderSide(color: scheme.primary.withValues(alpha: 0.35)),
-              ),
-            );
             return Container(
               padding: const EdgeInsets.all(14),
               decoration: BoxDecoration(
@@ -447,7 +476,7 @@ class _LinkCard extends StatelessWidget {
               ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [field, const SizedBox(height: 12), fetch, const SizedBox(height: 10), browser],
+                children: [field, const SizedBox(height: 12), fetch],
               ),
             );
           },
@@ -467,7 +496,7 @@ class _IdleHints extends StatelessWidget {
     const tips = [
       (Icons.content_paste_go_rounded, 'Paste & fetch', 'Copy a link from any app and tap the paste icon.'),
       (Icons.tune_rounded, 'Choose a format', 'Video up to 4K, or MP3 / M4A audio.'),
-      (Icons.travel_explore_rounded, 'Stuck?', 'Browser Mode finds media on pages that can\'t be read directly.'),
+      (Icons.travel_explore_rounded, 'Stuck?', 'Open a site below in the built-in browser to grab media from any page.'),
     ];
     return LayoutBuilder(
       builder: (context, c) {
@@ -557,17 +586,35 @@ class _LoadingCard extends StatelessWidget {
 }
 
 class _ErrorCard extends StatelessWidget {
-  const _ErrorCard({super.key, required this.error, required this.onRetry, required this.onBrowser, this.onCookies});
+  const _ErrorCard({
+    super.key,
+    required this.error,
+    required this.onRetry,
+    required this.onBrowser,
+    this.onCookies,
+    this.onYouTubeSignIn,
+  });
 
   final FetchException error;
   final VoidCallback onRetry;
   final VoidCallback onBrowser;
   final VoidCallback? onCookies;
 
+  /// Set for YouTube links while nobody is signed in.
+  final VoidCallback? onYouTubeSignIn;
+
+  static bool _needsSignIn(String message) {
+    final m = message.toLowerCase();
+    return m.contains('sign in') || m.contains('login') || m.contains('log in') || m.contains('cookies') ||
+        m.contains('not a bot') || m.contains('age-restricted') || m.contains('age restricted') ||
+        m.contains('confirm your age') || m.contains('inappropriate') || m.contains('private') || m.contains('members');
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
+    final signIn = onYouTubeSignIn != null && _needsSignIn(error.message);
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(20),
@@ -588,7 +635,11 @@ class _ErrorCard extends StatelessWidget {
             ),
             const SizedBox(height: 14),
             Text(
-              error.hint ?? 'FetchNet couldn\'t read this link directly. Browser Mode lets you open the page, play the media, and grab it from there.',
+              signIn
+                  ? 'YouTube wants a signed-in account for this video. Sign in with Google in YouTube Settings, '
+                      'then try again.'
+                  : error.hint ??
+                      'FetchNet couldn\'t read this link directly. Browser Mode lets you open the page, play the media, and grab it from there.',
               style: theme.textTheme.bodyMedium?.copyWith(height: 1.45),
             ),
             const SizedBox(height: 10),
@@ -611,7 +662,10 @@ class _ErrorCard extends StatelessWidget {
               spacing: 10,
               runSpacing: 10,
               children: [
-                GradientButton(label: 'Open in Browser Mode', icon: Icons.travel_explore_rounded, onPressed: onBrowser),
+                if (signIn)
+                  GradientButton(label: 'Sign in to YouTube', icon: Icons.login_rounded, onPressed: onYouTubeSignIn)
+                else
+                  GradientButton(label: 'Open in Browser Mode', icon: Icons.travel_explore_rounded, onPressed: onBrowser),
                 if (onCookies != null)
                   OutlinedButton.icon(
                     onPressed: onCookies,

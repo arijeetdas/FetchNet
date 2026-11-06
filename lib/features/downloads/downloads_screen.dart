@@ -7,9 +7,11 @@ import '../../core/platform/device_environment.dart';
 import '../../core/platform/native_bridge.dart';
 import '../../models/download_models.dart';
 import '../../models/media_info.dart';
-import '../../widgets/app_dialog.dart';
 import '../../widgets/brand.dart';
+import '../../widgets/kind_icon.dart';
+import '../../widgets/motion/page_motions.dart';
 import '../shell/home_shell.dart';
+import 'file_actions_sheet.dart';
 
 class DownloadsScreen extends StatelessWidget {
   const DownloadsScreen({super.key});
@@ -26,6 +28,7 @@ class DownloadsScreen extends StatelessWidget {
         return PageFrame(
           title: 'Downloads',
           subtitle: dir == null ? null : _friendlyDir(dir),
+          leading: const PageGlyph(PageGlyphKind.downloads),
           actions: [
             if (DeviceEnvironment.isDesktop && dir != null)
               IconButton.filledTonal(
@@ -35,8 +38,6 @@ class DownloadsScreen extends StatelessWidget {
               ),
           ],
           slivers: [
-            if (tasks.isEmpty && files.isEmpty)
-              const SliverToBoxAdapter(child: _EmptyState()),
             if (tasks.isNotEmpty) ...[
               _SectionHeader(title: 'In progress', count: tasks.where((t) => t.isActive).length),
               SliverList.separated(
@@ -45,6 +46,13 @@ class DownloadsScreen extends StatelessWidget {
                 itemBuilder: (context, i) => _TaskCard(task: tasks[i]),
               ),
             ],
+            // Above "Saved" (or the empty state), below anything in progress.
+            const SliverToBoxAdapter(
+              child: Padding(
+                padding: EdgeInsets.only(top: 18),
+                child: Center(child: DownloadsMotion()),
+              ),
+            ),
             if (files.isNotEmpty) ...[
               _SectionHeader(title: 'Saved', count: files.length),
               SliverGrid(
@@ -60,6 +68,7 @@ class DownloadsScreen extends StatelessWidget {
                 ),
               ),
             ],
+            if (tasks.isEmpty && files.isEmpty) const SliverToBoxAdapter(child: _EmptyState()),
           ],
         );
       },
@@ -122,7 +131,7 @@ class _Thumb extends StatelessWidget {
   Widget build(BuildContext context) {
     final fallback = Container(
       decoration: const BoxDecoration(gradient: AppColors.brandGradient),
-      child: Icon(kind == MediaKind.audio ? Icons.music_note_rounded : Icons.movie_rounded, color: Colors.white),
+      child: Icon(kindIcon(kind), color: Colors.white),
     );
     return ClipRRect(
       borderRadius: BorderRadius.circular(14),
@@ -256,22 +265,11 @@ class _FileCard extends StatelessWidget {
 
   final HistoryEntry entry;
 
-  Future<void> _open(BuildContext context) async {
-    final ok = await NativeBridge.openFile(entry.filePath!);
-    if (!ok && context.mounted) showSnack(context, 'No app found to open this file.', kind: ToastKind.error);
-  }
-
-  Future<void> _delete(BuildContext context) async {
-    final services = AppScope.of(context);
-    final ok = await confirmDialog(
-      context,
-      title: 'Delete file?',
-      message: '"${p.basename(entry.filePath!)}" will be permanently deleted from your device.',
-      confirmLabel: 'Delete',
-      destructive: true,
-    );
-    if (ok) await services.downloads.deleteFile(entry);
-  }
+  void _menu(BuildContext context) => showFileActions(
+        context,
+        entry,
+        thumbnail: _Thumb(url: entry.thumbnail, kind: entry.kind, size: 60),
+      );
 
   @override
   Widget build(BuildContext context) {
@@ -280,9 +278,10 @@ class _FileCard extends StatelessWidget {
     return Card(
       clipBehavior: Clip.antiAlias,
       child: InkWell(
-        onTap: () => _open(context),
+        onTap: () => openDownloadedFile(context, entry),
+        onLongPress: () => _menu(context),
         child: Padding(
-          padding: const EdgeInsets.all(12),
+          padding: const EdgeInsets.fromLTRB(12, 12, 6, 12),
           child: Row(
             children: [
               _Thumb(url: entry.thumbnail, kind: entry.kind, size: 64),
@@ -306,30 +305,16 @@ class _FileCard extends StatelessWidget {
                   ],
                 ),
               ),
-              PopupMenuButton<String>(
+              IconButton(
+                tooltip: NativeBridge.canShareNatively ? 'Share' : 'Copy file to share',
+                onPressed: () => shareDownloadedFile(context, entry),
+                icon: Icon(NativeBridge.canShareNatively ? Icons.share_rounded : Icons.copy_rounded, size: 21),
+                color: scheme.primary,
+              ),
+              IconButton(
                 tooltip: 'More',
-                onSelected: (v) {
-                  switch (v) {
-                    case 'open':
-                      _open(context);
-                    case 'reveal':
-                      NativeBridge.revealInFolder(entry.filePath!);
-                    case 'delete':
-                      _delete(context);
-                  }
-                },
-                itemBuilder: (context) => [
-                  const PopupMenuItem(value: 'open', child: ListTile(leading: Icon(Icons.play_arrow_rounded), title: Text('Open'))),
-                  if (DeviceEnvironment.isDesktop)
-                    const PopupMenuItem(
-                      value: 'reveal',
-                      child: ListTile(leading: Icon(Icons.folder_open_rounded), title: Text('Show in folder')),
-                    ),
-                  const PopupMenuItem(
-                    value: 'delete',
-                    child: ListTile(leading: Icon(Icons.delete_outline_rounded), title: Text('Delete file')),
-                  ),
-                ],
+                onPressed: () => _menu(context),
+                icon: const Icon(Icons.more_vert_rounded),
               ),
             ],
           ),
@@ -346,16 +331,9 @@ class _EmptyState extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 64),
+      padding: const EdgeInsets.fromLTRB(0, 12, 0, 64),
       child: Column(
         children: [
-          Container(
-            width: 88,
-            height: 88,
-            decoration: BoxDecoration(color: theme.colorScheme.primaryContainer, shape: BoxShape.circle),
-            child: Icon(Icons.download_rounded, size: 40, color: theme.colorScheme.onPrimaryContainer),
-          ),
-          const SizedBox(height: 18),
           Text('Nothing here yet', style: theme.textTheme.titleLarge),
           const SizedBox(height: 6),
           Text(

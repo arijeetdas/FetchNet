@@ -1,6 +1,6 @@
 import 'dart:convert';
 
-enum MediaKind { video, audio }
+enum MediaKind { video, audio, thumbnail }
 
 /// One selectable download choice ("1080p", "MP3 · 320 kbps", ...).
 class DownloadOption {
@@ -13,6 +13,7 @@ class DownloadOption {
     this.badge,
     this.sizeBytes,
     this.needsMerge = false,
+    this.directUrl,
   });
 
   final MediaKind kind;
@@ -37,6 +38,21 @@ class DownloadOption {
 
   /// Whether video and audio are downloaded separately and merged.
   final bool needsMerge;
+
+  /// Saved with a plain HTTP download instead of yt-dlp (thumbnails).
+  final String? directUrl;
+}
+
+/// One YouTube thumbnail size (see [MediaInfo.youtubeThumbnailCandidates]).
+class ThumbnailCandidate {
+  const ThumbnailCandidate({required this.url, required this.label, required this.width, required this.height});
+
+  final String url;
+  final String label;
+  final int width;
+  final int height;
+
+  String get extension => url.toLowerCase().contains('.webp') ? 'webp' : 'jpg';
 }
 
 /// One entry of a playlist / channel URL.
@@ -89,6 +105,53 @@ class MediaInfo {
   final Map<String, dynamic> raw;
 
   bool get isPlaylist => entries.isNotEmpty;
+
+  /// A single YouTube video (not a playlist / channel).
+  bool get isYouTube {
+    if (isPlaylist) return false;
+    final e = (extractor ?? '').toLowerCase();
+    if (e == 'youtube') return true;
+    final host = Uri.tryParse(url)?.host.toLowerCase() ?? '';
+    return e.isEmpty && (host.endsWith('youtube.com') || host == 'youtu.be');
+  }
+
+  String? get videoId => raw['id']?.toString();
+
+  /// The uploader's tags (YouTube), in order, without duplicates.
+  List<String> get tags {
+    final t = raw['tags'];
+    if (t is! List) return const [];
+    final seen = <String>{};
+    return [
+      for (final e in t)
+        if (e is String && e.trim().isNotEmpty && seen.add(e.trim().toLowerCase())) e.trim(),
+    ];
+  }
+
+  /// Thumbnail sizes YouTube may serve for this video, largest first. Not
+  /// every video has every size: probe them before offering.
+  List<ThumbnailCandidate> get youtubeThumbnailCandidates {
+    final id = videoId;
+    if (id == null || id.isEmpty) return const [];
+    final names = <String>{};
+    final thumbs = raw['thumbnails'];
+    if (thumbs is List) {
+      for (final t in thumbs.whereType<Map>()) {
+        final m = RegExp(r'/vi(?:_webp)?/[^/]+/([a-z0-9_]+)\.').firstMatch('${t['url'] ?? ''}');
+        if (m != null) names.add(m.group(1)!);
+      }
+    }
+    final vertical = names.contains('oardefault') || names.contains('oar2');
+    return [
+      if (vertical)
+        ThumbnailCandidate(url: 'https://i.ytimg.com/vi/$id/oardefault.jpg', label: 'Vertical', width: 1080, height: 1920),
+      ThumbnailCandidate(url: 'https://i.ytimg.com/vi/$id/maxresdefault.jpg', label: 'Max resolution', width: 1280, height: 720),
+      ThumbnailCandidate(url: 'https://i.ytimg.com/vi_webp/$id/maxresdefault.webp', label: 'Max resolution', width: 1280, height: 720),
+      ThumbnailCandidate(url: 'https://i.ytimg.com/vi/$id/sddefault.jpg', label: 'Standard', width: 640, height: 480),
+      ThumbnailCandidate(url: 'https://i.ytimg.com/vi/$id/hqdefault.jpg', label: 'High', width: 480, height: 360),
+      ThumbnailCandidate(url: 'https://i.ytimg.com/vi/$id/mqdefault.jpg', label: 'Medium', width: 320, height: 180),
+    ];
+  }
 
   List<Map<String, dynamic>> get _formats {
     final list = raw['formats'];

@@ -104,13 +104,13 @@ class StorageService extends ChangeNotifier {
   static const _alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 
   /// A tidy random name such as `FetchNet_Video_20261105_K7QM`.
-  static String randomFileName({required bool audio}) {
+  static String randomFileName({required bool audio, bool thumbnail = false}) {
     final now = DateTime.now();
     final date =
         '${now.year}${now.month.toString().padLeft(2, '0')}${now.day.toString().padLeft(2, '0')}';
     final rnd = Random();
     final tag = List.generate(4, (_) => _alphabet[rnd.nextInt(_alphabet.length)]).join();
-    return 'FetchNet_${audio ? 'Audio' : 'Video'}_${date}_$tag';
+    return 'FetchNet_${thumbnail ? 'Thumbnail' : audio ? 'Audio' : 'Video'}_${date}_$tag';
   }
 
   /// True when a file with this base name (any extension) is already in the

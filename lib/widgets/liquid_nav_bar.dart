@@ -5,7 +5,13 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 class LiquidNavItem {
-  const LiquidNavItem({required this.icon, required this.selectedIcon, required this.label, this.badge = 0});
+  const LiquidNavItem({
+    required this.icon,
+    required this.selectedIcon,
+    required this.label,
+    this.badge = 0,
+    this.dot = false,
+  });
 
   final IconData icon;
   final IconData selectedIcon;
@@ -13,6 +19,9 @@ class LiquidNavItem {
 
   /// Shown as a small count bubble when > 0.
   final int badge;
+
+  /// A small red dot (e.g. an app update), when there's no count.
+  final bool dot;
 }
 
 /// Floating glass navigation bar with a liquid selector.
@@ -257,8 +266,8 @@ class _NavItemState extends State<_NavItem> {
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
               Badge(
-                isLabelVisible: widget.item.badge > 0,
-                label: Text('${widget.item.badge}'),
+                isLabelVisible: widget.item.badge > 0 || widget.item.dot,
+                label: widget.item.badge > 0 ? Text('${widget.item.badge}') : null,
                 child: icon,
               ),
               const SizedBox(height: 3),

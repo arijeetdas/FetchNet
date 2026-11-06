@@ -5,11 +5,14 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
-import 'package:path/path.dart' as p;
 
 import '../../core/app_services.dart';
 import '../../core/format.dart';
+import '../../services/web_session.dart';
+import '../../widgets/app_dialog.dart';
 import '../../widgets/brand.dart';
+import '../home/sites_panel.dart';
+import '../youtube/youtube_screen.dart';
 import 'media_sniffer.dart';
 
 /// What Browser Mode hands back to Home.
@@ -36,9 +39,12 @@ class BrowserGrab {
 }
 
 class BrowserScreen extends StatefulWidget {
-  const BrowserScreen({super.key, this.initialUrl});
+  const BrowserScreen({super.key, this.initialUrl, this.youtubeHandoff = true});
 
   final String? initialUrl;
+
+  /// Opening a youtube.com page switches to FetchNet's YouTube view.
+  final bool youtubeHandoff;
 
   /// The in-app browser exists on Android, iOS, macOS, Windows and Linux (WPE WebKit).
   static bool get isSupported =>
@@ -80,14 +86,36 @@ class _BrowserScreenState extends State<BrowserScreen> {
   bool _canGoBack = false;
   bool _canGoForward = false;
   bool _grabbing = false;
+  bool _desktop = false;
+  bool _handingOff = false;
+
+  /// Opened straight on a YouTube link: hand off without loading anything.
+  late final bool _redirectOnly = widget.youtubeHandoff && isYouTubeUrl(widget.initialUrl);
 
   String get _startUrl => widget.initialUrl ?? 'https://www.google.com';
+
+  /// Lets Android load everything except YouTube pages without a round trip
+  /// to Dart (which would turn form posts into GETs).
+  static const _notYouTube = r'(?i)^(?!https?://(www\.|m\.)?(youtube\.com|youtu\.be)([/?#:]|$)).*$';
+
+  bool get _interceptsNavigation => widget.youtubeHandoff && !kIsWeb && Platform.isAndroid;
+
+  InAppWebViewSettings _settings() => WebSession.baseSettings(desktop: _desktop)
+    ..useOnLoadResource = true
+    ..mediaPlaybackRequiresUserGesture = true
+    ..supportMultipleWindows = false
+    ..useShouldOverrideUrlLoading = _interceptsNavigation
+    ..regexToAllowSyncUrlLoading = _interceptsNavigation ? _notYouTube : null;
 
   @override
   void initState() {
     super.initState();
     _pageUrl = _startUrl;
     _address.text = _startUrl;
+    if (_redirectOnly) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _handOff(_startUrl));
+      return;
+    }
     _scanTimer = Timer.periodic(const Duration(milliseconds: 2500), (_) => _scan());
   }
 
@@ -96,7 +124,46 @@ class _BrowserScreenState extends State<BrowserScreen> {
     _scanTimer?.cancel();
     _address.dispose();
     _addressFocus.dispose();
+    WebSession.flush();
     super.dispose();
+  }
+
+  /// Switches to FetchNet's YouTube view for [url]. A grabbed video is
+  /// handed back to Home; otherwise the browser returns to where it was.
+  Future<void> _handOff(String url) async {
+    if (_handingOff) return;
+    _handingOff = true;
+    final link = parseYouTubeLink(url);
+    final grab = await openYouTube(context, query: link.query, videoId: link.videoId);
+    _handingOff = false;
+    if (!mounted) return;
+    if (grab != null || _redirectOnly) {
+      Navigator.of(context).pop(grab);
+      return;
+    }
+    final c = _controller;
+    final current = (await c?.getUrl())?.toString();
+    if (!mounted || c == null || !isYouTubeUrl(current)) return;
+    if (await c.canGoBack()) {
+      await c.goBack();
+    } else if (mounted) {
+      Navigator.of(context).pop();
+    }
+  }
+
+  Future<void> _toggleDesktop() async {
+    setState(() => _desktop = !_desktop);
+    final c = _controller;
+    if (c == null) return;
+    await c.setSettings(settings: _settings());
+    await c.reload();
+  }
+
+  Future<void> _pinSite() async {
+    final host = Uri.tryParse(_pageUrl)?.host ?? '';
+    showSnack(context, 'Checking ${host.isEmpty ? 'this site' : host} with yt-dlp…');
+    final result = await AppScope.of(context).sites.pin(_pageUrl);
+    if (mounted) showPinResult(context, result);
   }
 
   void _consider(String url, {String? hint}) {
@@ -143,35 +210,10 @@ class _BrowserScreenState extends State<BrowserScreen> {
     _controller?.loadUrl(urlRequest: URLRequest(url: WebUri(url)));
   }
 
-  /// Writes the browser's cookies for [urls] in Netscape format for yt-dlp.
-  Future<String?> _exportCookies(List<String> urls) async {
-    final services = AppScope.of(context);
-    final lines = <String>{};
-    for (final u in urls) {
-      final uri = Uri.tryParse(u);
-      if (uri == null || uri.host.isEmpty) continue;
-      try {
-        final cookies = await CookieManager.instance().getCookies(url: WebUri(u), webViewController: _controller);
-        for (final c in cookies) {
-          final domain = (c.domain == null || c.domain!.isEmpty) ? uri.host : c.domain!;
-          final sub = domain.startsWith('.') ? 'TRUE' : 'FALSE';
-          final path = c.path ?? '/';
-          final secure = (c.isSecure ?? false) ? 'TRUE' : 'FALSE';
-          final expires = c.expiresDate == null ? 0 : (c.expiresDate! ~/ 1000);
-          lines.add([domain, sub, path, secure, '$expires', c.name, '${c.value}'].join('\t'));
-        }
-      } catch (_) {}
-    }
-    if (lines.isEmpty) return null;
-    final dir = await services.storage.workDir('cookies');
-    final file = File(p.join(dir.path, 'cookies-${DateTime.now().millisecondsSinceEpoch}.txt'));
-    await file.writeAsString('# Netscape HTTP Cookie File\n${lines.join('\n')}\n');
-    return file.path;
-  }
-
   Future<void> _grab(String mediaUrl, {bool audio = false}) async {
     if (_grabbing) return;
     setState(() => _grabbing = true);
+    final services = AppScope.of(context);
     try {
       final c = _controller;
       String? ua;
@@ -180,7 +222,10 @@ class _BrowserScreenState extends State<BrowserScreen> {
           ua = (await c.evaluateJavascript(source: 'navigator.userAgent'))?.toString();
         } catch (_) {}
       }
-      final cookies = await _exportCookies({_pageUrl, mediaUrl}.toList());
+      final cookies = await WebSession.exportCookies(
+        {_pageUrl, mediaUrl}.toList(),
+        await services.storage.workDir('cookies'),
+      );
       final args = <String>[
         if (cookies != null) ...['--cookies', cookies],
         if (ua != null && ua.isNotEmpty) ...['--user-agent', ua],
@@ -297,6 +342,9 @@ class _BrowserScreenState extends State<BrowserScreen> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
+    if (_redirectOnly) {
+      return const Scaffold(body: Center(child: EnergyLoader(size: 56)));
+    }
     return PopScope(
       canPop: !_canGoBack,
       onPopInvokedWithResult: (didPop, _) {
@@ -351,10 +399,44 @@ class _BrowserScreenState extends State<BrowserScreen> {
               onPressed: _canGoForward ? () => _controller?.goForward() : null,
               icon: const Icon(Icons.arrow_forward_rounded),
             ),
-            IconButton.filledTonal(
-              tooltip: 'Reload',
-              onPressed: () => _controller?.reload(),
-              icon: const Icon(Icons.refresh_rounded),
+            PopupMenuButton<String>(
+              tooltip: 'More',
+              icon: const Icon(Icons.more_vert_rounded),
+              style: IconButton.styleFrom(
+                backgroundColor: scheme.secondaryContainer,
+                foregroundColor: scheme.onSecondaryContainer,
+              ),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+              onSelected: (v) {
+                switch (v) {
+                  case 'reload':
+                    _controller?.reload();
+                  case 'desktop':
+                    _toggleDesktop();
+                  case 'pin':
+                    _pinSite();
+                }
+              },
+              itemBuilder: (context) => [
+                const PopupMenuItem(
+                  value: 'reload',
+                  child: ListTile(
+                    leading: Icon(Icons.refresh_rounded),
+                    title: Text('Reload'),
+                    contentPadding: EdgeInsets.zero,
+                  ),
+                ),
+                if (WebSession.isMobile)
+                  CheckedPopupMenuItem(value: 'desktop', checked: _desktop, child: const Text('Desktop view')),
+                const PopupMenuItem(
+                  value: 'pin',
+                  child: ListTile(
+                    leading: Icon(Icons.push_pin_outlined),
+                    title: Text('Pin this site'),
+                    contentPadding: EdgeInsets.zero,
+                  ),
+                ),
+              ],
             ),
             const SizedBox(width: 4),
           ],
@@ -371,18 +453,25 @@ class _BrowserScreenState extends State<BrowserScreen> {
           children: [
             Expanded(
               child: InAppWebView(
+                webViewEnvironment: WebSession.environment,
                 initialUrlRequest: URLRequest(url: WebUri(_startUrl)),
-                initialSettings: InAppWebViewSettings(
-                  javaScriptEnabled: true,
-                  useOnLoadResource: true,
-                  allowsInlineMediaPlayback: true,
-                  mediaPlaybackRequiresUserGesture: true,
-                  isInspectable: kDebugMode,
-                  supportMultipleWindows: false,
-                ),
+                initialSettings: _settings(),
                 onWebViewCreated: (c) => _controller = c,
+                shouldOverrideUrlLoading: (c, action) async {
+                  final url = action.request.url?.toString();
+                  if (action.isForMainFrame && widget.youtubeHandoff && isYouTubeUrl(url)) {
+                    _handOff(url!);
+                    return NavigationActionPolicy.CANCEL;
+                  }
+                  return NavigationActionPolicy.ALLOW;
+                },
                 onLoadStart: (c, url) {
                   if (url == null) return;
+                  if (widget.youtubeHandoff && isYouTubeUrl(url.toString())) {
+                    c.stopLoading();
+                    _handOff(url.toString());
+                    return;
+                  }
                   // A new page: forget media found on the previous one.
                   if (url.toString() != _pageUrl) _sniffer.reset();
                   setState(() {

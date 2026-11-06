@@ -6,14 +6,21 @@ import '../../core/app_services.dart';
 import '../../core/platform/device_environment.dart';
 import '../../core/platform/native_bridge.dart';
 import '../../engine/engine.dart';
+import '../../services/sites_service.dart';
 import '../../widgets/app_dialog.dart';
 import '../../widgets/brand.dart';
 import '../../widgets/platform_logo.dart';
+import '../../widgets/motion/page_motions.dart';
+import '../../widgets/site_icon.dart';
 import '../onboarding/disclaimer_content.dart';
 import '../shell/home_shell.dart';
+import '../shell/update_banner.dart';
+import '../youtube/youtube_settings_screen.dart';
 import 'about_dialog.dart';
+import 'settings_widgets.dart';
 
 const ytDlpRepo = 'https://github.com/yt-dlp/yt-dlp';
+const fetchNetRepo = 'https://git-fetchnet.arijeet.in';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -98,11 +105,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
         ),
         actions: [
           DialogButton(
-            label: 'yt-dlp on GitHub',
-            icon: Icons.code_rounded,
-            onPressed: () => launchUrl(Uri.parse(ytDlpRepo), mode: LaunchMode.externalApplication),
-          ),
-          DialogButton(
             label: 'Close',
             icon: Icons.check_circle_rounded,
             primary: true,
@@ -121,15 +123,22 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
     return PageFrame(
       title: 'Settings',
+      leading: const PageGlyph(PageGlyphKind.settings),
       maxWidth: 760,
       slivers: [
         SliverList.list(
           children: [
+            const UpdateBanner(padding: EdgeInsets.only(top: 8)),
+            const Padding(
+              padding: EdgeInsets.only(top: 10),
+              child: Center(child: SettingsMotion()),
+            ),
+
             // ───── Appearance ─────
-            const _SectionLabel('Appearance'),
-            _SettingsCard(
+            const SectionLabel('Appearance'),
+            SettingsCard(
               children: [
-                _Row(
+                SettingsRow(
                   icon: Icons.palette_rounded,
                   title: 'Theme',
                   subtitle: 'Follow the system, or pick light or dark.',
@@ -151,18 +160,31 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     ),
                   ),
                 ),
+                const Divider(height: 28),
+                ValueListenableBuilder<bool>(
+                  valueListenable: services.showAnimations,
+                  builder: (context, on, _) => SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    value: on,
+                    onChanged: services.setShowAnimations,
+                    title: const Text('Show animations'),
+                    subtitle: const Text(
+                      'Play the animated icons on Home, Downloads, History and Settings. When off, they stay still.',
+                    ),
+                  ),
+                ),
               ],
             ),
 
             // ───── Downloads ─────
-            const _SectionLabel('Downloads'),
+            const SectionLabel('Downloads'),
             ListenableBuilder(
               listenable: services.storage,
               builder: (context, _) {
                 final dir = services.storage.downloadDir;
-                return _SettingsCard(
+                return SettingsCard(
                   children: [
-                    _Row(
+                    SettingsRow(
                       icon: Icons.folder_rounded,
                       title: 'Save location',
                       subtitle: dir ?? (services.storage.error ?? 'Preparing…'),
@@ -186,17 +208,47 @@ class _SettingsScreenState extends State<SettingsScreen> {
               },
             ),
 
+            // ───── YouTube ─────
+            const SectionLabel('YouTube Settings'),
+            ListenableBuilder(
+              listenable: services.youtube,
+              builder: (context, _) {
+                final yt = services.youtube;
+                final profile = yt.profile;
+                final subtitle = yt.signedIn
+                    ? 'Signed in as ${profile?.email ?? profile?.name ?? 'your Google account'}'
+                    : 'Sign in with Google, thumbnail downloads and video tags';
+                return SettingsCard(
+                  padding: EdgeInsets.zero,
+                  children: [
+                    ListTile(
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+                      leading: yt.signedIn
+                          ? GoogleAvatar(profile: profile, size: 42)
+                          : const BrandGlyph(brand: SiteBrand.youtube, size: 40),
+                      title: const Text('YouTube', style: TextStyle(fontWeight: FontWeight.w800)),
+                      subtitle: Text(subtitle, maxLines: 2, overflow: TextOverflow.ellipsis),
+                      trailing: const Icon(Icons.chevron_right_rounded),
+                      onTap: () => Navigator.of(context).push(
+                        MaterialPageRoute(builder: (_) => const YouTubeSettingsScreen()),
+                      ),
+                    ),
+                  ],
+                );
+              },
+            ),
+
             // ───── Engine ─────
-            const _SectionLabel('Engine'),
+            const SectionLabel('Engine'),
             ListenableBuilder(
               listenable: Listenable.merge([services.engine.status, services.engine.componentInstall]),
               builder: (context, _) {
                 final status = services.engine.status.value;
                 final install = services.engine.componentInstall.value;
                 final supported = services.engine.isSupported;
-                return _SettingsCard(
+                return SettingsCard(
                   children: [
-                    _Row(
+                    SettingsRow(
                       icon: Icons.memory_rounded,
                       title: 'yt-dlp',
                       subtitle: !supported
@@ -228,7 +280,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     ],
                     if (services.engine.canInstallComponents) ...[
                       const Divider(height: 24),
-                      _Row(
+                      SettingsRow(
                         icon: Icons.movie_filter_rounded,
                         title: 'FFmpeg',
                         subtitle: status.ffmpegAvailable
@@ -242,7 +294,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                               ),
                       ),
                       const Divider(height: 24),
-                      _Row(
+                      SettingsRow(
                         icon: Icons.javascript_rounded,
                         title: 'JavaScript runtime',
                         subtitle: status.jsRuntime != null
@@ -268,8 +320,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
 
             // ───── About ─────
-            const _SectionLabel('About'),
-            _SettingsCard(
+            const SectionLabel('About'),
+            SettingsCard(
               padding: EdgeInsets.zero,
               children: [
                 ListTile(
@@ -278,6 +330,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   subtitle: const Text('What this app does'),
                   trailing: const Icon(Icons.chevron_right_rounded),
                   onTap: _showAboutApp,
+                ),
+                const Divider(indent: 16, endIndent: 16),
+                ListTile(
+                  leading: const FetchNetLogo(size: 26, glow: false),
+                  title: const Text('FetchNet on GitHub'),
+                  subtitle: const Text('git-fetchnet.arijeet.in'),
+                  trailing: const Icon(Icons.open_in_new_rounded, size: 20),
+                  onTap: () => launchUrl(Uri.parse(fetchNetRepo), mode: LaunchMode.externalApplication),
                 ),
                 const Divider(indent: 16, endIndent: 16),
                 ListTile(
@@ -339,83 +399,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
           ],
         ),
-      ],
-    );
-  }
-}
-
-class _SectionLabel extends StatelessWidget {
-  const _SectionLabel(this.text);
-
-  final String text;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(6, 22, 6, 10),
-      child: Text(
-        text.toUpperCase(),
-        style: theme.textTheme.labelMedium?.copyWith(
-          color: theme.colorScheme.primary,
-          fontWeight: FontWeight.w900,
-          letterSpacing: 1.2,
-        ),
-      ),
-    );
-  }
-}
-
-class _SettingsCard extends StatelessWidget {
-  const _SettingsCard({required this.children, this.padding = const EdgeInsets.all(18)});
-
-  final List<Widget> children;
-  final EdgeInsets padding;
-
-  @override
-  Widget build(BuildContext context) {
-    return Card(
-      clipBehavior: Clip.antiAlias,
-      child: Padding(
-        padding: padding,
-        child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: children),
-      ),
-    );
-  }
-}
-
-class _Row extends StatelessWidget {
-  const _Row({required this.icon, required this.title, required this.subtitle, this.trailing});
-
-  final IconData icon;
-  final String title;
-  final String subtitle;
-  final Widget? trailing;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final scheme = theme.colorScheme;
-    return Row(
-      children: [
-        Container(
-          width: 42,
-          height: 42,
-          decoration: BoxDecoration(color: scheme.primaryContainer, borderRadius: BorderRadius.circular(13)),
-          child: Icon(icon, color: scheme.onPrimaryContainer, size: 22),
-        ),
-        const SizedBox(width: 14),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(title, style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w800)),
-              const SizedBox(height: 2),
-              Text(subtitle, style: theme.textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant)),
-            ],
-          ),
-        ),
-        if (trailing != null) ...[const SizedBox(width: 10), trailing!],
       ],
     );
   }

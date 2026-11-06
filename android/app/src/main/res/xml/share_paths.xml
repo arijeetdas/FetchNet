@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Files FetchNet can hand to other apps through the share sheet. -->
+<paths>
+    <!-- Internal storage/Download/FetchNet (and Download for older installs). -->
+    <external-path name="downloads" path="Download/" />
+</paths>

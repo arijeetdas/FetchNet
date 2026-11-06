@@ -1,8 +1,11 @@
+import 'dart:async';
+import 'dart:io';
+
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../../core/app_services.dart';
 import '../../core/format.dart';
-import '../../engine/engine.dart';
 import '../../models/media_info.dart';
 import '../../widgets/app_dialog.dart';
 import '../../widgets/brand.dart';
@@ -20,6 +23,18 @@ class MediaResultView extends StatefulWidget {
 class _MediaResultViewState extends State<MediaResultView> {
   late MediaKind _kind = widget.info.preferAudio ? MediaKind.audio : MediaKind.video;
   int _selected = 0;
+
+  /// YouTube thumbnail sizes that exist for this video, probed once.
+  Future<List<DownloadOption>>? _thumbnails;
+  List<DownloadOption>? _thumbnailOptions;
+
+  void _loadThumbnails() {
+    if (_thumbnails != null) return;
+    _thumbnails = probeThumbnails(widget.info).then((list) {
+      if (mounted) setState(() => _thumbnailOptions = list);
+      return list;
+    });
+  }
 
   Future<void> _download(DownloadOption option) async {
     final services = AppScope.of(context);
@@ -47,32 +62,49 @@ class _MediaResultViewState extends State<MediaResultView> {
   @override
   Widget build(BuildContext context) {
     final services = AppScope.of(context);
-    return ValueListenableBuilder<EngineStatus>(
-      valueListenable: services.engine.status,
-      builder: (context, status, _) {
+    return ListenableBuilder(
+      listenable: Listenable.merge([services.engine.status, services.youtube]),
+      builder: (context, _) {
+        final status = services.engine.status.value;
+        final youtube = widget.info.isYouTube;
+        final showThumbnails = youtube && services.youtube.thumbnailDownloads;
+        final showTags = youtube && services.youtube.showTags;
+        if (showThumbnails) _loadThumbnails();
+
         final ffmpeg = status.ffmpegAvailable;
         final video = widget.info.videoOptions(ffmpeg: ffmpeg);
         final audio = widget.info.audioOptions(ffmpeg: ffmpeg);
+        final thumbs = _thumbnailOptions ?? const <DownloadOption>[];
         var kind = _kind;
+        if (kind == MediaKind.thumbnail && !showThumbnails) kind = MediaKind.video;
         if (kind == MediaKind.video && video.isEmpty && audio.isNotEmpty) kind = MediaKind.audio;
         if (kind == MediaKind.audio && audio.isEmpty && video.isNotEmpty) kind = MediaKind.video;
-        final options = kind == MediaKind.video ? video : audio;
+        final options = switch (kind) {
+          MediaKind.video => video,
+          MediaKind.audio => audio,
+          MediaKind.thumbnail => thumbs,
+        };
         final selected = options.isEmpty ? null : options[_selected.clamp(0, options.length - 1)];
+        // Thumbnails are plain image downloads: no need to wait for yt-dlp.
+        final canDownload = selected != null && (kind == MediaKind.thumbnail || status.isReady);
 
         final header = _MediaHeader(info: widget.info);
         final picker = _OptionPicker(
           kind: kind,
           hasVideo: video.isNotEmpty,
           hasAudio: audio.isNotEmpty,
+          showThumbnails: showThumbnails,
+          thumbnailsLoading: showThumbnails && _thumbnailOptions == null,
           options: options,
           selected: selected,
-          ffmpegMissing: !ffmpeg,
+          ffmpegMissing: !ffmpeg && kind != MediaKind.thumbnail,
+          tags: showTags ? widget.info.tags : null,
           onKind: (k) => setState(() {
             _kind = k;
             _selected = 0;
           }),
           onSelect: (o) => setState(() => _selected = options.indexOf(o)),
-          onDownload: selected == null || !status.isReady ? null : () => _download(selected),
+          onDownload: canDownload ? () => _download(selected) : null,
         );
 
         return LayoutBuilder(builder: (context, c) {
@@ -212,9 +244,12 @@ class _OptionPicker extends StatelessWidget {
     required this.kind,
     required this.hasVideo,
     required this.hasAudio,
+    required this.showThumbnails,
+    required this.thumbnailsLoading,
     required this.options,
     required this.selected,
     required this.ffmpegMissing,
+    required this.tags,
     required this.onKind,
     required this.onSelect,
     required this.onDownload,
@@ -223,6 +258,11 @@ class _OptionPicker extends StatelessWidget {
   final MediaKind kind;
   final bool hasVideo;
   final bool hasAudio;
+  final bool showThumbnails;
+  final bool thumbnailsLoading;
+
+  /// YouTube tags to list under the Download button, or `null` to hide them.
+  final List<String>? tags;
   final List<DownloadOption> options;
   final DownloadOption? selected;
   final bool ffmpegMissing;
@@ -251,6 +291,12 @@ class _OptionPicker extends StatelessWidget {
               label: const Text('Audio'),
               enabled: hasAudio,
             ),
+            if (showThumbnails)
+              const ButtonSegment(
+                value: MediaKind.thumbnail,
+                icon: Icon(Icons.image_rounded),
+                label: FittedBox(fit: BoxFit.scaleDown, child: Text('Thumbnail')),
+              ),
           ],
           selected: {kind},
           showSelectedIcon: false,
@@ -258,15 +304,26 @@ class _OptionPicker extends StatelessWidget {
         ),
         const SizedBox(height: 14),
         Text(
-          kind == MediaKind.video ? 'Choose a quality' : 'Choose a format',
+          switch (kind) {
+            MediaKind.video => 'Choose a quality',
+            MediaKind.audio => 'Choose a format',
+            MediaKind.thumbnail => 'Choose a size',
+          },
           style: theme.textTheme.labelLarge?.copyWith(color: scheme.onSurfaceVariant),
         ),
         const SizedBox(height: 8),
-        if (options.isEmpty)
+        if (options.isEmpty && kind == MediaKind.thumbnail && thumbnailsLoading)
+          const Padding(
+            padding: EdgeInsets.symmetric(vertical: 20),
+            child: Center(child: EnergyLoader(size: 36)),
+          )
+        else if (options.isEmpty)
           Padding(
             padding: const EdgeInsets.symmetric(vertical: 16),
             child: Text(
-              'No ${kind.name} formats are available for this link.',
+              kind == MediaKind.thumbnail
+                  ? 'No thumbnails are available for this video.'
+                  : 'No ${kind.name} formats are available for this link.',
               style: theme.textTheme.bodyMedium?.copyWith(color: scheme.onSurfaceVariant),
             ),
           )
@@ -300,8 +357,139 @@ class _OptionPicker extends StatelessWidget {
           expand: true,
           onPressed: onDownload,
         ),
+        if (tags != null) ...[
+          const SizedBox(height: 14),
+          _TagsBox(tags: tags!),
+          const SizedBox(height: 10),
+          OutlinedButton.icon(
+            onPressed: tags!.isEmpty
+                ? null
+                : () async {
+                    await Clipboard.setData(ClipboardData(text: tags!.join(', ')));
+                    if (context.mounted) {
+                      showSnack(context, '${tags!.length} tags copied', kind: ToastKind.success);
+                    }
+                  },
+            icon: const Icon(Icons.copy_all_rounded),
+            label: const Text('Copy all tags'),
+            style: OutlinedButton.styleFrom(
+              minimumSize: const Size(double.infinity, 50),
+              side: BorderSide(color: scheme.primary.withValues(alpha: 0.35)),
+            ),
+          ),
+        ],
       ],
     );
+  }
+}
+
+class _TagsBox extends StatelessWidget {
+  const _TagsBox({required this.tags});
+
+  final List<String> tags;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    return Container(
+      padding: const EdgeInsets.fromLTRB(14, 12, 14, 14),
+      decoration: BoxDecoration(
+        color: scheme.surfaceContainerLowest,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: scheme.outlineVariant.withValues(alpha: 0.5)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.sell_rounded, size: 18, color: scheme.primary),
+              const SizedBox(width: 8),
+              Text(
+                tags.isEmpty ? 'Tags' : 'Tags · ${tags.length}',
+                style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w800),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          if (tags.isEmpty)
+            Text(
+              'This video has no tags.',
+              style: theme.textTheme.bodyMedium?.copyWith(color: scheme.onSurfaceVariant),
+            )
+          else
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxHeight: 200),
+              child: SingleChildScrollView(
+                child: Wrap(
+                  spacing: 6,
+                  runSpacing: 6,
+                  children: [
+                    for (final t in tags)
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                        decoration: BoxDecoration(
+                          color: scheme.secondaryContainer.withValues(alpha: 0.7),
+                          borderRadius: BorderRadius.circular(999),
+                        ),
+                        child: Text(
+                          t,
+                          style: theme.textTheme.labelMedium?.copyWith(
+                            color: scheme.onSecondaryContainer,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Checks which YouTube thumbnail sizes exist for [info] (missing sizes
+/// answer 404) and turns them into download options, largest first.
+Future<List<DownloadOption>> probeThumbnails(MediaInfo info) async {
+  final candidates = info.youtubeThumbnailCandidates;
+  if (candidates.isEmpty) return const [];
+  final http = HttpClient()..connectionTimeout = const Duration(seconds: 8);
+  try {
+    final sizes = await Future.wait(candidates.map((c) async {
+      try {
+        final req = await http.headUrl(Uri.parse(c.url));
+        final res = await req.close().timeout(const Duration(seconds: 10));
+        await res.drain<void>();
+        if (res.statusCode != 200) return null;
+        return res.contentLength > 0 ? res.contentLength : 0;
+      } catch (_) {
+        return -1; // unknown (network): keep only the sizes every video has
+      }
+    }));
+    final options = <DownloadOption>[];
+    for (var i = 0; i < candidates.length; i++) {
+      final c = candidates[i];
+      final size = sizes[i];
+      if (size == null) continue;
+      if (size < 0 && !c.url.contains('hqdefault') && !c.url.contains('mqdefault')) continue;
+      final ext = c.extension;
+      options.add(DownloadOption(
+        kind: MediaKind.thumbnail,
+        label: c.label,
+        detail: '${c.width}×${c.height} · ${ext.toUpperCase()}',
+        badge: c.width >= 1280 || c.height >= 1280 ? 'HD' : null,
+        sizeBytes: size > 0 ? size : null,
+        extension: ext,
+        formatArgs: const [],
+        directUrl: c.url,
+      ));
+    }
+    return options;
+  } finally {
+    http.close(force: true);
   }
 }
 

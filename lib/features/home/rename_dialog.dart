@@ -37,12 +37,13 @@ class _RenameDialogState extends State<_RenameDialog> {
   String? _suggestion;
 
   bool get _audio => widget.option.kind == MediaKind.audio;
+  bool get _thumbnail => widget.option.kind == MediaKind.thumbnail;
 
   @override
   void initState() {
     super.initState();
     final initial = StorageService.sanitizeFileName(widget.info.title);
-    _controller = TextEditingController(text: initial.isEmpty ? StorageService.randomFileName(audio: _audio) : initial);
+    _controller = TextEditingController(text: initial.isEmpty ? StorageService.randomFileName(audio: _audio, thumbnail: _thumbnail) : initial);
     _controller.selection = TextSelection(baseOffset: 0, extentOffset: _controller.text.length);
     _controller.addListener(() {
       if (_error != null) setState(() => _error = _suggestion = null);
@@ -56,14 +57,14 @@ class _RenameDialogState extends State<_RenameDialog> {
   }
 
   void _randomize() {
-    _controller.text = StorageService.randomFileName(audio: _audio);
+    _controller.text = StorageService.randomFileName(audio: _audio, thumbnail: _thumbnail);
     _controller.selection = TextSelection.collapsed(offset: _controller.text.length);
   }
 
   void _submit() {
     final services = AppScope.of(context);
     var name = StorageService.sanitizeFileName(_controller.text);
-    if (name.isEmpty) name = StorageService.randomFileName(audio: _audio);
+    if (name.isEmpty) name = StorageService.randomFileName(audio: _audio, thumbnail: _thumbnail);
     final reserved = services.downloads.reservedNames;
     if (services.storage.baseNameTaken(name) || reserved.contains(name.toLowerCase())) {
       setState(() {

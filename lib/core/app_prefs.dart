@@ -14,8 +14,15 @@ class AppPrefs {
   static const _kDisclaimerAcceptedAt = 'onboarding.disclaimer_accepted_at';
   static const _kThemeMode = 'settings.theme_mode';
   static const _kAutoUpdateEngine = 'settings.auto_update_engine';
+  static const _kShowAnimations = 'settings.show_animations';
   static const _kLastEngineUpdateCheck = 'engine.last_update_check';
   static const _kHistory = 'downloads.history';
+  static const _kYtThumbnails = 'youtube.thumbnail_downloads';
+  static const _kYtTags = 'youtube.show_tags';
+  static const _kYtAccount = 'youtube.account';
+  static const _kSites = 'home.sites';
+  static const _kExtractors = 'engine.extractors';
+  static const _kExtractorsVersion = 'engine.extractors_version';
 
   // ───── Onboarding ─────
   bool get welcomeSeen => _prefs.getBool(_kWelcomeSeen) ?? false;
@@ -35,6 +42,9 @@ class AppPrefs {
       };
   Future<void> setThemeMode(ThemeMode mode) => _prefs.setString(_kThemeMode, mode.name);
 
+  bool get showAnimations => _prefs.getBool(_kShowAnimations) ?? true;
+  Future<void> setShowAnimations(bool value) => _prefs.setBool(_kShowAnimations, value);
+
   bool get autoUpdateEngine => _prefs.getBool(_kAutoUpdateEngine) ?? true;
   Future<void> setAutoUpdateEngine(bool value) => _prefs.setBool(_kAutoUpdateEngine, value);
 
@@ -45,6 +55,30 @@ class AppPrefs {
 
   Future<void> markEngineUpdateChecked() =>
       _prefs.setInt(_kLastEngineUpdateCheck, DateTime.now().millisecondsSinceEpoch);
+
+  // ───── YouTube ─────
+  bool get youtubeThumbnailDownloads => _prefs.getBool(_kYtThumbnails) ?? false;
+  Future<void> setYoutubeThumbnailDownloads(bool value) => _prefs.setBool(_kYtThumbnails, value);
+
+  bool get youtubeShowTags => _prefs.getBool(_kYtTags) ?? false;
+  Future<void> setYoutubeShowTags(bool value) => _prefs.setBool(_kYtTags, value);
+
+  /// Last known Google account profile (JSON), shown while offline.
+  String? get youtubeAccountJson => _prefs.getString(_kYtAccount);
+  Future<void> setYoutubeAccountJson(String? value) =>
+      value == null ? _prefs.remove(_kYtAccount) : _prefs.setString(_kYtAccount, value);
+
+  // ───── Home sites (JSON list, user-added only) ─────
+  List<String> get sitesJson => _prefs.getStringList(_kSites) ?? const [];
+  Future<void> setSitesJson(List<String> value) => _prefs.setStringList(_kSites, value);
+
+  // ───── yt-dlp extractor names, cached per yt-dlp version ─────
+  String? get extractorsVersion => _prefs.getString(_kExtractorsVersion);
+  List<String> get extractors => _prefs.getStringList(_kExtractors) ?? const [];
+  Future<void> setExtractors(String version, List<String> names) async {
+    await _prefs.setStringList(_kExtractors, names);
+    await _prefs.setString(_kExtractorsVersion, version);
+  }
 
   // ───── Download history (JSON list) ─────
   List<String> get historyJson => _prefs.getStringList(_kHistory) ?? const [];

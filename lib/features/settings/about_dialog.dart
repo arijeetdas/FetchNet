@@ -1,13 +1,11 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/platform/device_environment.dart';
 import '../../widgets/app_dialog.dart';
 import '../../widgets/brand.dart';
 import '../../widgets/platform_logo.dart';
-
-const fetchNetWebsite = 'https://fetchnet.arijeet.in';
+import '../shell/update_banner.dart';
 
 /// Recommended Android build for this device's preferred ABI, or `Universal`.
 String recommendedAndroidBuild() {
@@ -236,7 +234,8 @@ class _AboutDialog extends StatelessWidget {
                       label: 'Check for Updates',
                       icon: Icons.system_update_rounded,
                       expand: true,
-                      onPressed: () => launchUrl(Uri.parse(fetchNetWebsite), mode: LaunchMode.externalApplication),
+                      // Opens /updates/<platform>/<version>+<build>[-<abi>] in the system browser.
+                      onPressed: () => openUpdatePage(context),
                     ),
                     const SizedBox(height: 10),
                     DialogButton(

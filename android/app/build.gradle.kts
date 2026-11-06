@@ -42,6 +42,14 @@ android {
         // flag during build.
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+        // The pubspec.yaml version, untouched by split-per-ABI version codes.
+        // Read by the app for update checks (DeviceEnvironment.pubspecBuildNumber).
+        buildConfigField("int", "PUBSPEC_BUILD_NUMBER", flutter.versionCode.toString())
+        buildConfigField("String", "PUBSPEC_VERSION_NAME", "\"${flutter.versionName}\"")
+    }
+
+    buildFeatures {
+        buildConfig = true
     }
 
     packaging {

@@ -24,6 +24,9 @@ class DownloadManager extends ChangeNotifier {
 
   final List<DownloadTask> _tasks = [];
   final Map<String, EngineRun> _runs = {};
+
+  /// Plain HTTP downloads (thumbnails), closed to cancel.
+  final Map<String, HttpClient> _direct = {};
   bool _askedNotificationPermission = false;
   DateTime _lastNotify = DateTime.fromMillisecondsSinceEpoch(0);
   Timer? _notifyTimer;
@@ -39,9 +42,13 @@ class DownloadManager extends ChangeNotifier {
 
   /// History entries whose file still exists in the download folder under the
   /// name it was saved with.
-  List<HistoryEntry> get completedFiles => history.entries
-      .where((e) => e.status == DownloadStatus.completed && e.filePath != null && storage.isInDownloadDir(e.filePath!))
-      .toList();
+  List<HistoryEntry> get completedFiles {
+    final seen = <String>{};
+    return history.entries
+        .where((e) => e.status == DownloadStatus.completed && e.filePath != null && storage.isInDownloadDir(e.filePath!))
+        .where((e) => seen.add(HistoryStore.fileKey(e)!))
+        .toList();
+  }
 
   Future<void> enqueue({
     required MediaInfo info,
@@ -97,6 +104,7 @@ class DownloadManager extends ChangeNotifier {
     }
     task.stage = 'Cancelling…';
     notifyListeners();
+    _direct[task.id]?.close(force: true);
     await _runs[task.id]?.cancel();
   }
 
@@ -144,6 +152,12 @@ class DownloadManager extends ChangeNotifier {
       _fail(task, storage.error ?? 'The download folder isn\'t available.');
       return;
     }
+    if (task.option.directUrl != null) {
+      await _runDirect(task, dir);
+      notifyListeners();
+      _pump();
+      return;
+    }
     final temp = await storage.workDir('parts/${task.id}');
 
     final args = <String>[
@@ -187,6 +201,58 @@ class DownloadManager extends ChangeNotifier {
     }
     notifyListeners();
     _pump();
+  }
+
+  /// Saves [DownloadOption.directUrl] straight into the download folder.
+  Future<void> _runDirect(DownloadTask task, String dir) async {
+    final http = HttpClient()..connectionTimeout = const Duration(seconds: 15);
+    _direct[task.id] = http;
+    final path = p.join(dir, '${task.fileBaseName}.${task.option.extension}');
+    final part = File('$path.part');
+    try {
+      final req = await http.getUrl(Uri.parse(task.option.directUrl!));
+      final res = await req.close().timeout(const Duration(seconds: 30));
+      if (res.statusCode != 200) throw HttpException('The server answered with error ${res.statusCode}.');
+      final total = res.contentLength > 0 ? res.contentLength : null;
+      task
+        ..status = DownloadStatus.downloading
+        ..stage = 'Downloading'
+        ..totalBytes = total;
+      final sink = part.openWrite();
+      var received = 0;
+      try {
+        await for (final chunk in res) {
+          sink.add(chunk);
+          received += chunk.length;
+          task.downloadedBytes = received;
+          task.progress = total == null ? null : (received / total).clamp(0, 1).toDouble();
+          _throttledNotify();
+        }
+      } finally {
+        await sink.close();
+      }
+      if (task.stage == 'Cancelling…') throw const HttpException('Cancelled');
+      final target = File(path);
+      if (target.existsSync()) target.deleteSync();
+      part.renameSync(path);
+      task.filePath = path;
+      await _complete(task, dir);
+    } catch (e) {
+      try {
+        if (part.existsSync()) part.deleteSync();
+      } catch (_) {}
+      if (task.stage == 'Cancelling…') {
+        task.status = DownloadStatus.cancelled;
+        _tasks.remove(task);
+        await _record(task);
+        _finishNotification(task);
+      } else {
+        _fail(task, e is HttpException ? e.message : 'Couldn\'t download the image ($e).');
+      }
+    } finally {
+      _direct.remove(task.id);
+      http.close(force: true);
+    }
   }
 
   void _onLine(DownloadTask task, String line) {

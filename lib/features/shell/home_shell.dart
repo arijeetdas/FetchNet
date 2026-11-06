@@ -1,8 +1,15 @@
+import 'dart:async';
+import 'dart:io';
+
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../../core/app_services.dart';
+import '../../services/update_service.dart';
+import '../../widgets/app_dialog.dart';
 import '../../widgets/brand.dart';
 import '../../widgets/liquid_nav_bar.dart';
+import '../../widgets/toast.dart';
 import '../downloads/downloads_screen.dart';
 import '../history/history_screen.dart';
 import '../home/home_screen.dart';
@@ -43,17 +50,72 @@ class _HomeShellState extends State<HomeShell> {
     (Icons.settings_outlined, Icons.settings_rounded, 'Settings'),
   ];
 
+  /// Update-check result already reported to the user.
+  UpdateState? _reported;
+  Timer? _onlineWatch;
+
   @override
   void initState() {
     super.initState();
     _services = AppScope.of(context);
     _services.tabRequest.addListener(_onTabRequest);
+    _services.updates.addListener(_onUpdateState);
+    WidgetsBinding.instance.addPostFrameCallback((_) => _onUpdateState());
   }
 
   @override
   void dispose() {
     _services.tabRequest.removeListener(_onTabRequest);
+    _services.updates.removeListener(_onUpdateState);
+    _onlineWatch?.cancel();
     super.dispose();
+  }
+
+  /// Startup notices: a toast only when the update check failed, and an
+  /// exit countdown when there's no internet at all.
+  void _onUpdateState() {
+    if (!mounted) return;
+    final state = _services.updates.state;
+    if (state == UpdateState.checking || state == UpdateState.idle || state == _reported) return;
+    _reported = state;
+    switch (state) {
+      case UpdateState.failed:
+        showSnack(context, "Couldn't check for updates", kind: ToastKind.error);
+      case UpdateState.offline:
+        _showOffline();
+      default:
+        break;
+    }
+  }
+
+  void _showOffline() {
+    AppToast.show(
+      context,
+      'No internet connection. FetchNet needs the internet to fetch and download media.',
+      kind: ToastKind.error,
+      actionLabel: 'Exit',
+      onAction: _exitApp,
+      persistent: true,
+      countdownSeconds: 10,
+    );
+    // Back online before the countdown ends: stay open.
+    _onlineWatch?.cancel();
+    _onlineWatch = Timer.periodic(const Duration(seconds: 3), (timer) async {
+      if (!await UpdateService.hasInternet() || !mounted || !timer.isActive) return;
+      timer.cancel();
+      _reported = null;
+      showSnack(context, "You're back online", kind: ToastKind.success);
+      unawaited(_services.updates.check());
+    });
+  }
+
+  void _exitApp() {
+    _onlineWatch?.cancel();
+    if (Platform.isAndroid || Platform.isIOS) {
+      SystemNavigator.pop();
+    } else {
+      exit(0);
+    }
   }
 
   bool get _usesFloatingBar => MediaQuery.sizeOf(context).width < Breakpoints.rail;
@@ -83,6 +145,12 @@ class _HomeShellState extends State<HomeShell> {
   Widget _icon(int i, bool selected) {
     final d = _destinations[i];
     final icon = Icon(selected ? d.$2 : d.$1);
+    if (i == 3) {
+      return ListenableBuilder(
+        listenable: _services.updates,
+        builder: (context, _) => Badge(isLabelVisible: _services.updates.updateAvailable, child: icon),
+      );
+    }
     if (i != 1) return icon;
     return ListenableBuilder(
       listenable: _services.downloads,
@@ -129,7 +197,7 @@ class _HomeShellState extends State<HomeShell> {
                     ],
                   ),
                   child: ListenableBuilder(
-                    listenable: _services.downloads,
+                    listenable: Listenable.merge([_services.downloads, _services.updates]),
                     builder: (context, _) => LiquidNavBar(
                       target: _navTarget,
                       onTargetChanged: _target,
@@ -141,6 +209,7 @@ class _HomeShellState extends State<HomeShell> {
                             selectedIcon: _destinations[i].$2,
                             label: _destinations[i].$3,
                             badge: i == 1 ? _services.downloads.activeCount : 0,
+                            dot: i == 3 && _services.updates.updateAvailable,
                           ),
                       ],
                     ),
@@ -215,12 +284,16 @@ class PageFrame extends StatelessWidget {
     required this.title,
     required this.slivers,
     this.subtitle,
+    this.leading,
     this.actions = const [],
     this.maxWidth = 980,
   });
 
   final String title;
   final String? subtitle;
+
+  /// Big icon before the heading (e.g. [PageGlyph]).
+  final Widget? leading;
   final List<Widget> actions;
   final List<Widget> slivers;
   final double maxWidth;
@@ -240,6 +313,7 @@ class PageFrame extends StatelessWidget {
                 padding: EdgeInsets.fromLTRB(wide ? 28 : 20, wide ? 28 : 16, wide ? 28 : 12, 8),
                 child: Row(
                   children: [
+                    if (leading != null) ...[leading!, const SizedBox(width: 14)],
                     Expanded(
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,

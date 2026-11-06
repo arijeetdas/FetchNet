@@ -2,6 +2,7 @@ package com.fetchnet
 
 import android.Manifest
 import android.content.ActivityNotFoundException
+import android.content.ClipData
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.media.MediaScannerConnection
@@ -15,6 +16,7 @@ import android.util.Log
 import android.webkit.MimeTypeMap
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import androidx.core.content.FileProvider
 import com.yausername.ffmpeg.FFmpeg
 import com.yausername.youtubedl_android.YoutubeDL
 import com.yausername.youtubedl_android.YoutubeDLException
@@ -159,6 +161,8 @@ class MainActivity : FlutterActivity() {
                         "sdkInt" to Build.VERSION.SDK_INT,
                         "manufacturer" to (Build.MANUFACTURER ?: ""),
                         "model" to (Build.MODEL ?: ""),
+                        "pubspecVersionName" to BuildConfig.PUBSPEC_VERSION_NAME,
+                        "pubspecBuildNumber" to BuildConfig.PUBSPEC_BUILD_NUMBER,
                     )
                 )
 
@@ -216,6 +220,37 @@ class MainActivity : FlutterActivity() {
                         result.success(false)
                     } else {
                         openFile(path) { opened -> postResult { result.success(opened) } }
+                    }
+                }
+
+                "shareFile" -> {
+                    val path = call.argument<String>("path")
+                    if (path == null) {
+                        result.error("share_failed", "No file was given.", null)
+                    } else {
+                        shareFile(path, call.argument<String>("title")) { error ->
+                            postResult {
+                                if (error == null) result.success(true) else result.error("share_failed", error, null)
+                            }
+                        }
+                    }
+                }
+
+                "shareText" -> {
+                    val text = call.argument<String>("text")
+                    if (text.isNullOrBlank()) {
+                        result.success(false)
+                    } else {
+                        val send = Intent(Intent.ACTION_SEND).apply {
+                            type = "text/plain"
+                            putExtra(Intent.EXTRA_TEXT, text)
+                            call.argument<String>("subject")?.let { putExtra(Intent.EXTRA_SUBJECT, it) }
+                        }
+                        result.success(
+                            runCatching {
+                                startActivity(Intent.createChooser(send, null).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                            }.isSuccess,
+                        )
                     }
                 }
 
@@ -385,6 +420,55 @@ class MainActivity : FlutterActivity() {
                     done(false)
                 }
             }
+        }
+    }
+
+    /**
+     * System share sheet for a downloaded file. Uses FetchNet's FileProvider
+     * (works for every file type); falls back to the file's MediaStore URI.
+     * Calls [done] with `null` on success or a human readable reason.
+     */
+    private fun shareFile(path: String, title: String?, done: (String?) -> Unit) {
+        val file = File(path)
+        if (!file.exists()) {
+            done("The file is no longer on this device.")
+            return
+        }
+        val mime = MimeTypeMap.getSingleton().getMimeTypeFromExtension(file.extension.lowercase()) ?: "*/*"
+        val providerUri = runCatching {
+            FileProvider.getUriForFile(applicationContext, "$packageName.share", file)
+        }.onFailure { Log.w("FetchNet", "FileProvider share failed for $path", it) }.getOrNull()
+        if (providerUri != null) {
+            done(startShare(providerUri, mime, file.name, title))
+            return
+        }
+        MediaScannerConnection.scanFile(applicationContext, arrayOf(path), arrayOf(mime)) { _, uri: Uri? ->
+            mainHandler.post {
+                done(if (uri == null) "Android couldn't index this file for sharing." else startShare(uri, mime, file.name, title))
+            }
+        }
+    }
+
+    private fun startShare(uri: Uri, mime: String, fileName: String, title: String?): String? {
+        val send = Intent(Intent.ACTION_SEND).apply {
+            type = mime
+            putExtra(Intent.EXTRA_STREAM, uri)
+            if (!title.isNullOrBlank()) putExtra(Intent.EXTRA_TITLE, title)
+            // Lets the share sheet show a preview and grants read access to the target.
+            clipData = ClipData.newRawUri(fileName, uri)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        return try {
+            val chooser = Intent.createChooser(send, title ?: fileName).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            startActivity(chooser)
+            null
+        } catch (e: ActivityNotFoundException) {
+            "No app on this device can receive this file."
+        } catch (e: Throwable) {
+            Log.w("FetchNet", "Share failed", e)
+            describe(e)
         }
     }
 

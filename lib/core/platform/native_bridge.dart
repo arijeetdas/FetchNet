@@ -70,6 +70,78 @@ class NativeBridge {
     return launchUrl(Uri.file(path));
   }
 
+  /// Whether the OS has a share sheet FetchNet can open (Android).
+  static bool get canShareNatively => _isAndroid;
+
+  /// Opens the Android share sheet for a downloaded file. Returns `null` when
+  /// the sheet opened, otherwise why it couldn't.
+  static Future<String?> shareFile(String path, {String? title}) async {
+    if (!_isAndroid) return 'Sharing isn\'t available on this device.';
+    try {
+      final ok = await _channel.invokeMethod<bool>('shareFile', {'path': path, 'title': title});
+      return ok == true ? null : 'The share sheet didn\'t open.';
+    } on PlatformException catch (e) {
+      return e.message ?? e.code;
+    } on MissingPluginException {
+      return 'This build of FetchNet can\'t share yet. Reinstall the latest build.';
+    } catch (e) {
+      return '$e';
+    }
+  }
+
+  /// Opens the Android share sheet for a piece of text (e.g. a link).
+  static Future<bool> shareText(String text, {String? subject}) async {
+    if (!_isAndroid) return false;
+    try {
+      return await _channel.invokeMethod<bool>('shareText', {'text': text, 'subject': subject}) ?? false;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Desktop "share": puts the file itself on the clipboard so it can be
+  /// pasted into a chat, an email or a folder.
+  static Future<bool> copyFileToClipboard(String path) async {
+    if (kIsWeb || !File(path).existsSync()) return false;
+    try {
+      if (Platform.isWindows) {
+        // Windows PowerShell 5.1 (always installed) puts files on the clipboard as a file drop list.
+        final literal = path.replaceAll("'", "''");
+        final r = await Process.run(
+          'powershell.exe',
+          ['-NoProfile', '-NonInteractive', '-Command', "Set-Clipboard -LiteralPath '$literal'"],
+        );
+        return r.exitCode == 0;
+      }
+      if (Platform.isMacOS) {
+        final r = await Process.run('osascript', [
+          '-e', 'on run argv',
+          '-e', 'set the clipboard to (POSIX file (item 1 of argv))',
+          '-e', 'end run',
+          path,
+        ]);
+        return r.exitCode == 0;
+      }
+      if (Platform.isLinux) {
+        final uri = '${Uri.file(path)}\n';
+        final wayland = (Platform.environment['WAYLAND_DISPLAY'] ?? '').isNotEmpty;
+        final candidates = [
+          if (wayland) ('wl-copy', ['--type', 'text/uri-list']),
+          ('xclip', ['-selection', 'clipboard', '-t', 'text/uri-list']),
+        ];
+        for (final (exe, args) in candidates) {
+          try {
+            final proc = await Process.start(exe, args);
+            proc.stdin.write(uri);
+            await proc.stdin.close();
+            if (await proc.exitCode.timeout(const Duration(seconds: 5), onTimeout: () => 0) == 0) return true;
+          } catch (_) {}
+        }
+      }
+    } catch (_) {}
+    return false;
+  }
+
   /// Opens the folder containing [path] with the file selected where possible.
   static Future<void> revealInFolder(String path) async {
     if (kIsWeb) return;

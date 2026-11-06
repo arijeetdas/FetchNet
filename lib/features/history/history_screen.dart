@@ -7,8 +7,9 @@ import '../../core/app_services.dart';
 import '../../core/format.dart';
 import '../../core/platform/native_bridge.dart';
 import '../../models/download_models.dart';
-import '../../models/media_info.dart';
 import '../../widgets/app_dialog.dart';
+import '../../widgets/kind_icon.dart';
+import '../../widgets/motion/page_motions.dart';
 import '../shell/home_shell.dart';
 
 class HistoryScreen extends StatefulWidget {
@@ -40,6 +41,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
         return PageFrame(
           title: 'History',
           subtitle: all.isEmpty ? null : '${all.length} download${all.length == 1 ? '' : 's'}',
+          leading: const PageGlyph(PageGlyphKind.history),
           actions: [
             if (all.isNotEmpty)
               IconButton.filledTonal(
@@ -58,6 +60,12 @@ class _HistoryScreenState extends State<HistoryScreen> {
               ),
           ],
           slivers: [
+            const SliverToBoxAdapter(
+              child: Padding(
+                padding: EdgeInsets.only(top: 10, bottom: 6),
+                child: Center(child: HistoryMotion()),
+              ),
+            ),
             if (all.isNotEmpty)
               SliverToBoxAdapter(
                 child: Padding(
@@ -97,11 +105,9 @@ class _HistoryScreenState extends State<HistoryScreen> {
             if (entries.isEmpty)
               SliverToBoxAdapter(
                 child: Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 64),
+                  padding: const EdgeInsets.fromLTRB(0, 12, 0, 64),
                   child: Column(
                     children: [
-                      Icon(Icons.history_rounded, size: 56, color: theme.colorScheme.outline),
-                      const SizedBox(height: 12),
                       Text(all.isEmpty ? 'No downloads yet' : 'No matches', style: theme.textTheme.titleMedium),
                     ],
                   ),
@@ -150,7 +156,7 @@ class _HistoryTile extends StatelessWidget {
                 height: 44,
                 decoration: BoxDecoration(color: scheme.primaryContainer, borderRadius: BorderRadius.circular(14)),
                 child: Icon(
-                  entry.kind == MediaKind.audio ? Icons.music_note_rounded : Icons.movie_rounded,
+                  kindIcon(entry.kind),
                   color: scheme.onPrimaryContainer,
                 ),
               ),

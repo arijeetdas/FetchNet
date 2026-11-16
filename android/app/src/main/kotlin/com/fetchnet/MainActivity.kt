@@ -43,6 +43,8 @@ class MainActivity : FlutterActivity() {
 
     @Volatile private var engineReady = false
     private var engineEvents: EventChannel.EventSink? = null
+    private var galleryEvents: EventChannel.EventSink? = null
+    private val galleryDl by lazy { GalleryDl(applicationContext) }
     private var shareEvents: EventChannel.EventSink? = null
     private var pendingSharedText: String? = null
     private var pendingLaunchAction: String? = null
@@ -162,6 +164,59 @@ class MainActivity : FlutterActivity() {
 
             override fun onCancel(arguments: Any?) {
                 engineEvents = null
+            }
+        })
+
+        // ───── gallery-dl (images & posts), on yt-dlp's bundled Python ─────
+        MethodChannel(messenger, "fetchnet/gallerydl").setMethodCallHandler { call, result ->
+            val id = call.argument<String>("id") ?: ""
+            val site = call.argument<String>("site") ?: ""
+            val args = call.argument<List<String>>("args") ?: emptyList()
+            when (call.method) {
+                "run" -> executor.execute {
+                    val response = try {
+                        ensureEngine()
+                        galleryDl.run(id, site, args, onLine = null)
+                    } catch (e: Throwable) {
+                        Log.e(TAG, "gallery-dl run failed", e)
+                        mapOf("exitCode" to -1, "out" to "", "err" to describe(e))
+                    }
+                    postResult { result.success(response) }
+                }
+
+                "start" -> {
+                    result.success(null)
+                    executor.execute {
+                        val response = try {
+                            ensureEngine()
+                            galleryDl.run(id, site, args) { line ->
+                                mainHandler.post {
+                                    galleryEvents?.success(mapOf("id" to id, "type" to "line", "line" to line))
+                                }
+                            }
+                        } catch (e: Throwable) {
+                            Log.e(TAG, "gallery-dl start failed", e)
+                            mapOf("exitCode" to -1, "out" to "", "err" to describe(e))
+                        }
+                        mainHandler.post {
+                            galleryEvents?.success(response + mapOf("id" to id, "type" to "exit"))
+                        }
+                    }
+                }
+
+                "cancel" -> result.success(galleryDl.cancel(id))
+
+                else -> result.notImplemented()
+            }
+        }
+
+        EventChannel(messenger, "fetchnet/gallerydl/events").setStreamHandler(object : EventChannel.StreamHandler {
+            override fun onListen(arguments: Any?, events: EventChannel.EventSink?) {
+                galleryEvents = events
+            }
+
+            override fun onCancel(arguments: Any?) {
+                galleryEvents = null
             }
         })
 
@@ -621,27 +676,32 @@ class MainActivity : FlutterActivity() {
         return device.matches(Regex(".+_cheets|cheets_.+"))
     }
 
-    /** `universal`, `arm64-v8a`, `armeabi-v7a`, `x86_64` or `x86`, from the installed APK's native libs. */
+    /**
+     * `universal`, `arm64-v8a`, `armeabi-v7a`, `x86_64` or `x86`, from the
+     * installed app's native libs. Flutter's own engine library is present in
+     * every flavour, so it tells which ABIs were built in (the yt-dlp libs ship
+     * all four). The base APK and any split APKs are read: an app installed as
+     * splits (Play-style installs, `adb install-multiple`) keeps its native libs
+     * in a per-ABI split, not in the base APK.
+     */
     private fun getInstalledApkType(): String {
-        try {
-            val apkPath = applicationInfo.sourceDir ?: return "universal"
-            java.util.zip.ZipFile(apkPath).use { zip ->
-                val abis = mutableSetOf<String>()
-                // Flutter's own engine library is present in every flavour, so it
-                // tells which ABIs this APK was built for (the yt-dlp libs ship all four).
-                val entries = zip.entries()
-                while (entries.hasMoreElements()) {
-                    val name = entries.nextElement().name
-                    if (name.startsWith("lib/") && name.endsWith("/libflutter.so")) {
-                        abis.add(name.split("/")[1])
+        val abis = mutableSetOf<String>()
+        val apks = listOfNotNull(applicationInfo.sourceDir) + (applicationInfo.splitSourceDirs?.toList() ?: emptyList())
+        for (apkPath in apks) {
+            try {
+                java.util.zip.ZipFile(apkPath).use { zip ->
+                    val entries = zip.entries()
+                    while (entries.hasMoreElements()) {
+                        val name = entries.nextElement().name
+                        if (name.startsWith("lib/") && name.endsWith("/libflutter.so")) {
+                            abis.add(name.split("/")[1])
+                        }
                     }
                 }
-                val standard = abis.filter { it in setOf("arm64-v8a", "armeabi-v7a", "x86", "x86_64") }
-                if (standard.size > 1) return "universal"
-                if (standard.size == 1) return standard.first()
+            } catch (_: Exception) {
             }
-        } catch (_: Exception) {
         }
-        return "universal"
+        val standard = abis.filter { it in setOf("arm64-v8a", "armeabi-v7a", "x86", "x86_64") }
+        return if (standard.size == 1) standard.first() else "universal"
     }
 }

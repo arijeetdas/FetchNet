@@ -91,6 +91,8 @@ class _FileActionsSheet extends StatelessWidget {
       MediaKind.video => 'Video',
       MediaKind.audio => 'Audio',
       MediaKind.thumbnail => 'Thumbnail',
+      MediaKind.image => 'Image',
+      MediaKind.post => entry.files.length > 1 ? 'Post · ${entry.files.length} files' : 'Post',
     };
     final link = Uri.tryParse(entry.url);
     final hasLink = link != null && link.hasScheme && link.host.isNotEmpty;

@@ -28,6 +28,57 @@ class AppPrefs {
   static const _kSites = 'home.sites';
   static const _kExtractors = 'engine.extractors';
   static const _kExtractorsVersion = 'engine.extractors_version';
+  static const _kChangelogSeenBuild = 'app.changelog_seen_build';
+  static const _kGalleryEnabled = 'gallery.enabled';
+  static const _kLastGalleryUpdateCheck = 'gallery.last_update_check';
+  static const _kGalleryHosts = 'gallery.hosts';
+  static const _kGalleryHostsVersion = 'gallery.hosts_version';
+
+  // ───── What's new ─────
+  /// One flag per build: `whatsnew.shown.<build>` = true once that build's
+  /// "What's new" popup was shown (or skipped on a fresh install).
+  static const _kWhatsNewShownPrefix = 'whatsnew.shown.';
+
+  /// Builds that have a flag (normally just one). A build number saved by
+  /// earlier versions of the popup counts as a flag too.
+  Set<int> get whatsNewShownBuilds => {
+        for (final key in _prefs.getKeys())
+          if (key.startsWith(_kWhatsNewShownPrefix) && _prefs.getBool(key) == true)
+            ?int.tryParse(key.substring(_kWhatsNewShownPrefix.length)),
+        ?_prefs.getInt(_kChangelogSeenBuild),
+      };
+
+  /// Whether [build] has its flag (read straight from memory: instant).
+  bool whatsNewShown(int build) => _prefs.getBool('$_kWhatsNewShownPrefix$build') == true;
+
+  /// Sets the flag of [build] and deletes every other one.
+  Future<void> markWhatsNewShown(int build) async {
+    await _prefs.setBool('$_kWhatsNewShownPrefix$build', true);
+    for (final key in _prefs.getKeys().toList()) {
+      if (key.startsWith(_kWhatsNewShownPrefix) && key != '$_kWhatsNewShownPrefix$build') await _prefs.remove(key);
+    }
+    await _prefs.remove(_kChangelogSeenBuild);
+  }
+
+  // ───── gallery-dl (images & posts) ─────
+  bool get galleryEnabled => _prefs.getBool(_kGalleryEnabled) ?? true;
+  Future<void> setGalleryEnabled(bool value) => _prefs.setBool(_kGalleryEnabled, value);
+
+  DateTime? get lastGalleryUpdateCheck {
+    final ms = _prefs.getInt(_kLastGalleryUpdateCheck);
+    return ms == null ? null : DateTime.fromMillisecondsSinceEpoch(ms);
+  }
+
+  Future<void> markGalleryUpdateChecked() =>
+      _prefs.setInt(_kLastGalleryUpdateCheck, DateTime.now().millisecondsSinceEpoch);
+
+  /// Sites gallery-dl supports, cached per gallery-dl version.
+  String? get galleryHostsVersion => _prefs.getString(_kGalleryHostsVersion);
+  List<String> get galleryHosts => _prefs.getStringList(_kGalleryHosts) ?? const [];
+  Future<void> setGalleryHosts(String version, List<String> hosts) async {
+    await _prefs.setStringList(_kGalleryHosts, hosts);
+    await _prefs.setString(_kGalleryHostsVersion, version);
+  }
 
   // ───── Onboarding ─────
   bool get welcomeSeen => _prefs.getBool(_kWelcomeSeen) ?? false;

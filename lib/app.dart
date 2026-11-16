@@ -67,6 +67,9 @@ class _StartGateState extends State<_StartGate> {
         },
         onAccepted: () async {
           await services.prefs.acceptDisclaimer();
+          // A fresh install has nothing "new": mark this build's notes seen.
+          final installed = await services.updates.installedRelease();
+          if (installed != null) await services.prefs.markWhatsNewShown(installed.buildNumber);
           if (!mounted) return;
           setState(() => _accepted = true);
           services.start();

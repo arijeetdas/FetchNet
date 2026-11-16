@@ -183,6 +183,21 @@ class _FailedRun extends EngineRun {
   Future<void> cancel() async {}
 }
 
+/// A run that could not start (engine missing, unsupported platform).
+class FailedEngineRun extends EngineRun {
+  FailedEngineRun(this.reason);
+  final String reason;
+
+  @override
+  Stream<String> get lines => const Stream.empty();
+
+  @override
+  Future<EngineResult> get done async => EngineResult(exitCode: -1, stdout: '', stderr: reason);
+
+  @override
+  Future<void> cancel() async {}
+}
+
 /// Pulls the most useful error text out of yt-dlp's stderr.
 String extractEngineError(String stderr) {
   final lines = stderr.split(RegExp(r'\r?\n')).map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
@@ -195,26 +210,62 @@ String extractEngineError(String stderr) {
   return message;
 }
 
-/// A friendlier explanation for common yt-dlp failures, or `null`.
-String? friendlyEngineHint(String error) {
+/// A YouTube / YouTube Music link. These open FetchNet's YouTube view, never
+/// Browser Mode, so their hints must not point there.
+bool isYouTubeLink(String? url) {
+  final host = Uri.tryParse(url ?? '')?.host.toLowerCase() ?? '';
+  return host == 'youtu.be' || host == 'youtube.com' || host.endsWith('.youtube.com');
+}
+
+/// The failure asks for a signed-in user (bot check, age gate, members-only).
+bool isSignInError(String error) {
   final e = error.toLowerCase();
+  return e.contains('sign in') || e.contains('login') || e.contains('log in') || e.contains('cookies') ||
+      e.contains('confirm you') || e.contains('age-restricted') || e.contains('age restricted') ||
+      e.contains('inappropriate for some users') || e.contains('confirm your age');
+}
+
+/// A failure retrying can't fix (the video itself is gone or locked).
+bool isPermanentEngineError(String error) {
+  final e = error.toLowerCase();
+  return e.contains('unsupported url') || e.contains('is not a valid url') || e.contains('private video') ||
+      e.contains('video is private') || e.contains('video unavailable') || e.contains('has been removed') ||
+      e.contains('not available in your country') || e.contains('members-only') || e.contains('join this channel') ||
+      e.contains('premieres in') || e.contains('live event will begin') || e.contains('no space left') ||
+      e.contains('permission denied') || e.contains('disk full');
+}
+
+/// A friendlier explanation for common yt-dlp failures, or `null`. [url]
+/// tailors it to YouTube links; [signedIn] means the failed run already
+/// carried the user's sign-in (so asking them to sign in would be wrong).
+String? friendlyEngineHint(String error, {String? url, bool signedIn = false}) {
+  final e = error.toLowerCase();
+  final youtube = isYouTubeLink(url);
   if (e.contains('unsupported url')) {
     return 'This site isn\'t supported directly. Open it in Browser Mode so FetchNet can find the media on the page.';
   }
-  if (e.contains('sign in') || e.contains('login') || e.contains('log in') || e.contains('cookies') ||
-      e.contains('confirm you') || e.contains('age')) {
+  if (e.contains('private')) return 'This video is private.';
+  if (isSignInError(e)) {
+    if (youtube) {
+      return signedIn
+          ? 'YouTube is running a bot check right now, even with your Google sign-in. Wait a minute, then try again.'
+          : 'YouTube wants a signed-in viewer for this one. Sign in with Google in FetchNet\'s YouTube tab, then try again.';
+    }
     return 'This video needs you to be signed in. Open it in Browser Mode, sign in, then grab it from there.';
   }
-  if (e.contains('private')) return 'This video is private.';
   if (e.contains('403') || e.contains('forbidden')) {
-    return 'The site refused the request. Browser Mode often works around this.';
+    return youtube
+        ? 'YouTube refused the request for a moment. Try again; it usually works on the next attempt.'
+        : 'The site refused the request. Browser Mode often works around this.';
   }
   if (e.contains('unable to download webpage') || e.contains('getaddrinfo') || e.contains('timed out') ||
       e.contains('network is unreachable')) {
     return 'Couldn\'t reach the site. Check your internet connection and try again.';
   }
-  if (e.contains('no video formats') || e.contains('no media')) {
-    return 'No downloadable media was found. Try Browser Mode and play the video there.';
+  if (e.contains('no video formats') || e.contains('no media') || e.contains('requested format is not available')) {
+    return youtube
+        ? 'YouTube didn\'t offer this quality just now. Try again in a moment.'
+        : 'No downloadable media was found. Try Browser Mode and play the video there.';
   }
   return null;
 }

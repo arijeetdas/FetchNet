@@ -15,11 +15,12 @@ import '../../widgets/site_icon.dart';
 import '../onboarding/disclaimer_content.dart';
 import '../shell/home_shell.dart';
 import '../shell/update_banner.dart';
+import '../shell/whats_new_dialog.dart';
 import '../youtube/youtube_settings_screen.dart';
 import 'about_dialog.dart';
+import 'engines_screen.dart';
 import 'settings_widgets.dart';
 
-const ytDlpRepo = 'https://github.com/yt-dlp/yt-dlp';
 const fetchNetRepo = 'https://git-fetchnet.arijeet.in';
 
 class SettingsScreen extends StatefulWidget {
@@ -31,7 +32,6 @@ class SettingsScreen extends StatefulWidget {
 
 class _SettingsScreenState extends State<SettingsScreen> {
   String _version = '';
-  bool _updating = false;
 
   @override
   void initState() {
@@ -39,15 +39,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
     PackageInfo.fromPlatform().then((info) {
       if (mounted) setState(() => _version = info.version);
     }).catchError((_) {});
-  }
-
-  Future<void> _updateEngine() async {
-    final services = AppScope.of(context);
-    setState(() => _updating = true);
-    final message = await services.engine.update();
-    if (!mounted) return;
-    setState(() => _updating = false);
-    showSnack(context, message, kind: message.startsWith('Update failed') ? ToastKind.error : ToastKind.success);
   }
 
   Future<void> _install(EngineComponent component) async {
@@ -96,10 +87,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
         content: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 440),
           child: Text(
-            'FetchNet is a lightweight, cross-platform interface for yt-dlp. Paste a link, choose video or audio in the '
-            'quality you want, and FetchNet saves it to Download/FetchNet.\n\n'
-            'All the heavy lifting is done by yt-dlp, a free and open-source project maintained by its own community. '
-            'FetchNet is not affiliated with yt-dlp.',
+            'FetchNet is a lightweight, cross-platform interface for yt-dlp and gallery-dl. Paste a link, choose video '
+            'or audio in the quality you want, or pick the images and files of a post, and FetchNet saves them to '
+            'Download/FetchNet, sorted into Images, Audio and Video folders.\n\n'
+            'All the heavy lifting is done by yt-dlp (video and audio) and gallery-dl (images, galleries and posts), '
+            'free and open-source projects maintained by their own communities. FetchNet is not affiliated with '
+            'either of them.',
             style: theme.textTheme.bodyMedium?.copyWith(height: 1.5),
           ),
         ),
@@ -187,7 +180,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     SettingsRow(
                       icon: Icons.folder_rounded,
                       title: 'Save location',
-                      subtitle: dir ?? (services.storage.error ?? 'Preparing…'),
+                      subtitle: dir == null
+                          ? (services.storage.error ?? 'Preparing…')
+                          : '$dir\nSorted into Images, Audio and Video folders',
                       trailing: DeviceEnvironment.isDesktop && dir != null
                           ? IconButton(
                               tooltip: 'Open folder',
@@ -238,82 +233,92 @@ class _SettingsScreenState extends State<SettingsScreen> {
               },
             ),
 
-            // ───── Engine ─────
-            const SectionLabel('Engine'),
+            // ───── Engines ─────
+            // Versions, updates, links and credits live on the Engines
+            // screen; the switches and add-ons stay here.
+            const SectionLabel('Engines'),
             ListenableBuilder(
               listenable: Listenable.merge([services.engine.status, services.engine.componentInstall]),
               builder: (context, _) {
                 final status = services.engine.status.value;
                 final install = services.engine.componentInstall.value;
                 final supported = services.engine.isSupported;
+                final gallery = services.gallery.engine;
                 return SettingsCard(
+                  padding: EdgeInsets.zero,
                   children: [
-                    SettingsRow(
-                      icon: Icons.memory_rounded,
-                      title: 'yt-dlp',
-                      subtitle: !supported
-                          ? 'Not available on ${DeviceEnvironment.platformDisplayName}'
-                          : status.version != null
-                              ? 'Version ${status.version}'
-                              : (status.message ?? 'Starting…'),
-                      trailing: supported
-                          ? FilledButton.tonal(
-                              onPressed: _updating || !status.isReady ? null : _updateEngine,
-                              child: _updating || status.state == EngineState.updating
-                                  ? const EnergyLoader(size: 22)
-                                  : const Text('Update'),
-                            )
-                          : null,
+                    const EnginesSummaryTile(),
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(18, 0, 18, 14),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          if (supported) ...[
+                            const Divider(height: 16),
+                            SwitchListTile(
+                              contentPadding: EdgeInsets.zero,
+                              value: services.prefs.autoUpdateEngine,
+                              onChanged: (v) async {
+                                await services.prefs.setAutoUpdateEngine(v);
+                                setState(() {});
+                              },
+                              title: const Text('Keep engines up to date'),
+                              subtitle: const Text('Sites change often. Checks for a new yt-dlp and gallery-dl once a day.'),
+                            ),
+                          ],
+                          if (gallery.isSupported) ...[
+                            const Divider(height: 16),
+                            SwitchListTile(
+                              contentPadding: EdgeInsets.zero,
+                              value: services.prefs.galleryEnabled,
+                              onChanged: (v) async {
+                                await services.prefs.setGalleryEnabled(v);
+                                if (v) gallery.initialize();
+                                setState(() {});
+                              },
+                              title: const Text('Images & posts'),
+                              subtitle: const Text('Uses gallery-dl to list the images, videos and audio in posts and galleries.'),
+                            ),
+                          ],
+                          if (services.engine.canInstallComponents) ...[
+                          const Divider(height: 16),
+                          SettingsRow(
+                            icon: Icons.movie_filter_rounded,
+                            title: 'FFmpeg',
+                            subtitle: status.ffmpegAvailable
+                                ? 'Installed — HD video and MP3 available'
+                                : 'Needed for HD video (merging) and MP3 conversion',
+                            trailing: status.ffmpegAvailable
+                                ? Icon(Icons.check_circle_rounded, color: scheme.primary)
+                                : FilledButton.tonal(
+                                    onPressed: install != null ? null : () => _install(EngineComponent.ffmpeg),
+                                    child: const Text('Install'),
+                                  ),
+                          ),
+                          const Divider(height: 24),
+                          SettingsRow(
+                            icon: Icons.javascript_rounded,
+                            title: 'JavaScript runtime',
+                            subtitle: status.jsRuntime != null
+                                ? 'Using ${status.jsRuntime}'
+                                : 'YouTube needs one for full quality options. Installs Deno.',
+                            trailing: status.jsRuntime != null
+                                ? Icon(Icons.check_circle_rounded, color: scheme.primary)
+                                : FilledButton.tonal(
+                                    onPressed: install != null ? null : () => _install(EngineComponent.jsRuntime),
+                                    child: const Text('Install'),
+                                  ),
+                          ),
+                          if (install != null) ...[
+                            const SizedBox(height: 14),
+                            Text(install.label, style: theme.textTheme.bodySmall),
+                            const SizedBox(height: 6),
+                            GradientProgressBar(value: install.progress, height: 6),
+                          ],
+                          ],
+                        ],
+                      ),
                     ),
-                    if (supported) ...[
-                      const Divider(height: 24),
-                      SwitchListTile(
-                        contentPadding: EdgeInsets.zero,
-                        value: services.prefs.autoUpdateEngine,
-                        onChanged: (v) async {
-                          await services.prefs.setAutoUpdateEngine(v);
-                          setState(() {});
-                        },
-                        title: const Text('Keep yt-dlp up to date'),
-                        subtitle: const Text('Sites change often. Checks for a new yt-dlp once a day.'),
-                      ),
-                    ],
-                    if (services.engine.canInstallComponents) ...[
-                      const Divider(height: 24),
-                      SettingsRow(
-                        icon: Icons.movie_filter_rounded,
-                        title: 'FFmpeg',
-                        subtitle: status.ffmpegAvailable
-                            ? 'Installed — HD video and MP3 available'
-                            : 'Needed for HD video (merging) and MP3 conversion',
-                        trailing: status.ffmpegAvailable
-                            ? Icon(Icons.check_circle_rounded, color: scheme.primary)
-                            : FilledButton.tonal(
-                                onPressed: install != null ? null : () => _install(EngineComponent.ffmpeg),
-                                child: const Text('Install'),
-                              ),
-                      ),
-                      const Divider(height: 24),
-                      SettingsRow(
-                        icon: Icons.javascript_rounded,
-                        title: 'JavaScript runtime',
-                        subtitle: status.jsRuntime != null
-                            ? 'Using ${status.jsRuntime}'
-                            : 'YouTube needs one for full quality options. Installs Deno.',
-                        trailing: status.jsRuntime != null
-                            ? Icon(Icons.check_circle_rounded, color: scheme.primary)
-                            : FilledButton.tonal(
-                                onPressed: install != null ? null : () => _install(EngineComponent.jsRuntime),
-                                child: const Text('Install'),
-                              ),
-                      ),
-                      if (install != null) ...[
-                        const SizedBox(height: 14),
-                        Text(install.label, style: theme.textTheme.bodySmall),
-                        const SizedBox(height: 6),
-                        GradientProgressBar(value: install.progress, height: 6),
-                      ],
-                    ],
                   ],
                 );
               },
@@ -333,19 +338,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 ),
                 const Divider(indent: 16, endIndent: 16),
                 ListTile(
+                  leading: const Icon(Icons.new_releases_outlined),
+                  title: const Text('What\'s new'),
+                  subtitle: const Text('Release notes for this version'),
+                  trailing: const Icon(Icons.chevron_right_rounded),
+                  onTap: () => showFullChangelog(context, services),
+                ),
+                const Divider(indent: 16, endIndent: 16),
+                ListTile(
                   leading: const FetchNetLogo(size: 26, glow: false),
                   title: const Text('FetchNet on GitHub'),
                   subtitle: const Text('git-fetchnet.arijeet.in'),
                   trailing: const Icon(Icons.open_in_new_rounded, size: 20),
                   onTap: () => launchUrl(Uri.parse(fetchNetRepo), mode: LaunchMode.externalApplication),
-                ),
-                const Divider(indent: 16, endIndent: 16),
-                ListTile(
-                  leading: const Icon(Icons.code_rounded),
-                  title: const Text('yt-dlp on GitHub'),
-                  subtitle: const Text('github.com/yt-dlp/yt-dlp'),
-                  trailing: const Icon(Icons.open_in_new_rounded, size: 20),
-                  onTap: () => launchUrl(Uri.parse(ytDlpRepo), mode: LaunchMode.externalApplication),
                 ),
                 const Divider(indent: 16, endIndent: 16),
                 ListTile(

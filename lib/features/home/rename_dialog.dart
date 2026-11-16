@@ -39,11 +39,22 @@ class _RenameDialogState extends State<_RenameDialog> {
   bool get _audio => widget.option.kind == MediaKind.audio;
   bool get _thumbnail => widget.option.kind == MediaKind.thumbnail;
 
+  /// Several files of a post: the name is a folder's.
+  bool get _folder => widget.option.kind == MediaKind.post;
+
+  String? get _label => switch (widget.option.kind) {
+        MediaKind.image => 'Image',
+        MediaKind.post => 'Post',
+        _ => null,
+      };
+
+  String _random() => StorageService.randomFileName(audio: _audio, thumbnail: _thumbnail, label: _label);
+
   @override
   void initState() {
     super.initState();
     final initial = StorageService.sanitizeFileName(widget.info.title);
-    _controller = TextEditingController(text: initial.isEmpty ? StorageService.randomFileName(audio: _audio, thumbnail: _thumbnail) : initial);
+    _controller = TextEditingController(text: initial.isEmpty ? _random() : initial);
     _controller.selection = TextSelection(baseOffset: 0, extentOffset: _controller.text.length);
     _controller.addListener(() {
       if (_error != null) setState(() => _error = _suggestion = null);
@@ -57,19 +68,22 @@ class _RenameDialogState extends State<_RenameDialog> {
   }
 
   void _randomize() {
-    _controller.text = StorageService.randomFileName(audio: _audio, thumbnail: _thumbnail);
+    _controller.text = _random();
     _controller.selection = TextSelection.collapsed(offset: _controller.text.length);
   }
 
   void _submit() {
     final services = AppScope.of(context);
     var name = StorageService.sanitizeFileName(_controller.text);
-    if (name.isEmpty) name = StorageService.randomFileName(audio: _audio, thumbnail: _thumbnail);
+    if (name.isEmpty) name = _random();
     final reserved = services.downloads.reservedNames;
-    if (services.storage.baseNameTaken(name) || reserved.contains(name.toLowerCase())) {
+    final kind = widget.option.kind;
+    if (services.storage.baseNameTaken(name, kind: kind, folders: _folder) || reserved.contains(name.toLowerCase())) {
       setState(() {
-        _error = 'A file with this name already exists in the FetchNet folder.';
-        _suggestion = services.storage.uniqueBaseName(name, alsoTaken: reserved);
+        _error = _folder
+            ? 'A folder or file with this name already exists in FetchNet\'s Images, Audio or Video folder.'
+            : 'A file with this name already exists in the FetchNet/${MediaFolder.forKind(kind).folderName} folder.';
+        _suggestion = services.storage.uniqueBaseName(name, alsoTaken: reserved, kind: kind, folders: _folder);
       });
       return;
     }
@@ -91,10 +105,19 @@ class _RenameDialogState extends State<_RenameDialog> {
             width: 42,
             height: 42,
             decoration: BoxDecoration(gradient: AppColors.brandGradient, borderRadius: BorderRadius.circular(13)),
-            child: Icon(_audio ? Icons.music_note_rounded : Icons.movie_rounded, color: Colors.white, size: 22),
+            child: Icon(
+              switch (widget.option.kind) {
+                MediaKind.audio => Icons.music_note_rounded,
+                MediaKind.image || MediaKind.thumbnail => Icons.photo_rounded,
+                MediaKind.post => Icons.folder_rounded,
+                MediaKind.video => Icons.movie_rounded,
+              },
+              color: Colors.white,
+              size: 22,
+            ),
           ),
           const SizedBox(width: 12),
-          const Expanded(child: Text('Name your file')),
+          Expanded(child: Text(_folder ? 'Name the folder' : 'Name your file')),
         ],
       ),
       content: ConstrainedBox(
@@ -104,7 +127,11 @@ class _RenameDialogState extends State<_RenameDialog> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             Text(
-              'Saved to Download/FetchNet as ${widget.option.label}${widget.option.detail != null ? ' (${widget.option.detail})' : ''}.',
+              _folder
+                  ? 'Saved to Download/FetchNet as ${widget.option.label}${widget.option.detail != null ? ' (${widget.option.detail})' : ''}, '
+                      'sorted into its Images, Audio and Video folders.'
+                  : 'Saved to Download/FetchNet/${MediaFolder.forKind(widget.option.kind).folderName} as '
+                      '${widget.option.label}${widget.option.detail != null ? ' (${widget.option.detail})' : ''}.',
               style: theme.textTheme.bodyMedium?.copyWith(color: scheme.onSurfaceVariant),
             ),
             const SizedBox(height: 16),
@@ -115,11 +142,11 @@ class _RenameDialogState extends State<_RenameDialog> {
               textInputAction: TextInputAction.done,
               onSubmitted: (_) => _submit(),
               decoration: InputDecoration(
-                labelText: 'File name',
+                labelText: _folder ? 'Folder name' : 'File name',
                 hintText: 'Leave empty for a random name',
                 errorText: _error,
                 errorMaxLines: 2,
-                suffixText: '.${widget.option.extension}',
+                suffixText: widget.option.extension.isEmpty ? null : '.${widget.option.extension}',
                 suffixIcon: IconButton(
                   tooltip: 'Random name',
                   icon: const Icon(Icons.casino_rounded),

@@ -95,6 +95,8 @@ class _MediaResultViewState extends State<MediaResultView> {
           MediaKind.video => video,
           MediaKind.audio => audio,
           MediaKind.thumbnail => thumbs,
+          // Posts and images have their own view (PostResultView).
+          MediaKind.image || MediaKind.post => const <DownloadOption>[],
         };
         final selected = options.isEmpty ? null : options[_selected.clamp(0, options.length - 1)];
         // Thumbnails are plain image downloads: no need to wait for yt-dlp.
@@ -335,6 +337,7 @@ class _OptionPicker extends StatelessWidget {
             MediaKind.video => 'Choose a quality',
             MediaKind.audio => 'Choose a format',
             MediaKind.thumbnail => 'Choose a size',
+            MediaKind.image || MediaKind.post => 'Choose files',
           },
           style: theme.textTheme.labelLarge?.copyWith(color: scheme.onSurfaceVariant),
         ),

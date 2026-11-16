@@ -34,6 +34,26 @@ class SniffedMedia {
   }
 }
 
+/// A picture on the page, big enough to be content (not an icon).
+class SniffedImage {
+  const SniffedImage({required this.url, this.width, this.height});
+
+  final String url;
+  final int? width;
+  final int? height;
+
+  /// `jpg`, `png`, ... from the URL (or its `format=` parameter), else `jpg`.
+  String get extension {
+    final ext = MediaSniffer.extensionOf(url);
+    if (ext != null && imageExt.contains(ext)) return ext == 'jpeg' ? 'jpg' : ext;
+    final format = Uri.tryParse(url)?.queryParameters['format']?.toLowerCase();
+    if (format != null && imageExt.contains(format)) return format == 'jpeg' ? 'jpg' : format;
+    return 'jpg';
+  }
+
+  static const imageExt = {'jpg', 'jpeg', 'png', 'webp', 'gif', 'avif', 'bmp', 'heic', 'jxl'};
+}
+
 /// Finds downloadable video / audio among the requests a web page makes.
 ///
 /// Signals, in order: the response Content-Type (probed for ambiguous URLs),
@@ -46,6 +66,15 @@ class MediaSniffer {
 
   /// Detected media keyed by normalized URL, in discovery order.
   final LinkedHashMap<String, SniffedMedia> found = LinkedHashMap();
+
+  /// Pictures on the page, keyed by URL, in discovery order. Kept apart from
+  /// [found] so they never crowd out video and audio.
+  final LinkedHashMap<String, SniffedImage> images = LinkedHashMap();
+
+  static const _maxImages = 150;
+
+  /// Smaller pictures are icons, avatars and the like.
+  static const minImageSide = 300;
 
   String? userAgent;
   String? referer;
@@ -81,6 +110,7 @@ class MediaSniffer {
   void reset() {
     _generation++;
     found.clear();
+    images.clear();
     _seen.clear();
     _jobs.clear();
     _probes = 0;
@@ -201,6 +231,27 @@ class MediaSniffer {
         _add(SniffedMedia(url: url, kind: kind, sizeBytes: head.length, mime: head.contentType));
       });
     }
+  }
+
+  /// A picture the page shows (`<img>`, the page's preview image). Only
+  /// [minImageSide]+ pictures count when the size is known; SVGs and inline
+  /// data never do.
+  void considerImage(String rawUrl, {int? width, int? height}) {
+    if (!rawUrl.startsWith('http') || images.length >= _maxImages) return;
+    final url = rawUrl.split('#').first;
+    if (images.containsKey(url)) {
+      // A later scan may know the real size.
+      if (width != null && images[url]!.width == null) {
+        images[url] = SniffedImage(url: url, width: width, height: height);
+        onChanged();
+      }
+      return;
+    }
+    final ext = extensionOf(url);
+    if (ext == 'svg' || ext == 'ico') return;
+    if (width != null && height != null && (width < minImageSide || height < minImageSide)) return;
+    images[url] = SniffedImage(url: url, width: width, height: height);
+    onChanged();
   }
 
   void _add(SniffedMedia media) {

@@ -1,3 +1,4 @@
+import 'package:fetchnet/features/settings/about_dialog.dart';
 import 'package:fetchnet/services/update_service.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -51,5 +52,30 @@ void main() {
     expect(UpdateService.recommendedInstallTypeFor(['x86_64', 'arm64-v8a']), 'x86_64');
     expect(UpdateService.recommendedInstallTypeFor(['x86']), 'universal');
     expect(UpdateService.recommendedInstallTypeFor(const []), 'universal');
+  });
+
+  test('the About popup recommends the same build as the update link', () {
+    const devices = [
+      ['arm64-v8a', 'armeabi-v7a', 'armeabi'], // most phones
+      ['arm64-v8a'], // 64-bit-only phones (Pixel 7 and later)
+      ['armeabi-v7a', 'armeabi'], // older 32-bit phones
+      ['x86_64', 'x86', 'arm64-v8a', 'armeabi-v7a'], // Chromebooks, emulators
+      ['x86'], // 32-bit x86: no build is published for it
+      <String>[], // unknown
+    ];
+    for (final abis in devices) {
+      final link = UpdateService.recommendedInstallTypeFor(abis);
+      expect(recommendedAndroidBuildFor(abis), link == 'universal' ? 'Universal' : link, reason: '$abis');
+    }
+    expect(recommendedAndroidBuildFor(['x86']), 'Universal', reason: 'x86 is never published');
+  });
+
+  test('the installed build is named like the published ones', () {
+    expect(installedAndroidBuildFor('arm64-v8a'), 'arm64-v8a');
+    expect(installedAndroidBuildFor(' ARM64-V8A '), 'arm64-v8a');
+    expect(installedAndroidBuildFor('armeabi-v7a'), 'armeabi-v7a');
+    expect(installedAndroidBuildFor('x86_64'), 'x86_64');
+    expect(installedAndroidBuildFor('universal'), 'Universal');
+    expect(installedAndroidBuildFor(''), 'Universal');
   });
 }

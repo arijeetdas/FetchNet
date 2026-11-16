@@ -1,6 +1,27 @@
 import 'dart:convert';
 
-enum MediaKind { video, audio, thumbnail }
+enum MediaKind {
+  video,
+  audio,
+  thumbnail,
+
+  /// A picture (gallery-dl, or found by Browser Mode).
+  image,
+
+  /// Several files of one post, saved together in a folder.
+  post,
+}
+
+/// Which files of a post gallery-dl downloads.
+class GalleryDownload {
+  const GalleryDownload({required this.count, this.range});
+
+  /// gallery-dl's `--range` (`1-3,5`); `null` downloads every file.
+  final String? range;
+
+  /// Files selected, for progress ("3 of 12").
+  final int count;
+}
 
 /// One selectable download choice ("1080p", "MP3 · 320 kbps", ...).
 class DownloadOption {
@@ -14,6 +35,8 @@ class DownloadOption {
     this.sizeBytes,
     this.needsMerge = false,
     this.directUrl,
+    this.directHeaders = const {},
+    this.gallery,
   });
 
   final MediaKind kind;
@@ -41,6 +64,13 @@ class DownloadOption {
 
   /// Saved with a plain HTTP download instead of yt-dlp (thumbnails).
   final String? directUrl;
+
+  /// Headers for [directUrl] (cookies, referer and user agent of the page
+  /// an image was found on).
+  final Map<String, String> directHeaders;
+
+  /// Downloaded by gallery-dl (files of a post) instead of yt-dlp.
+  final GalleryDownload? gallery;
 }
 
 /// One YouTube thumbnail size (see [MediaInfo.youtubeThumbnailCandidates]).

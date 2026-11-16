@@ -8,9 +8,12 @@ import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 
 import '../../core/app_services.dart';
 import '../../core/format.dart';
+import '../../models/media_info.dart';
+import '../../services/storage_service.dart';
 import '../../services/web_session.dart';
 import '../../widgets/app_dialog.dart';
 import '../../widgets/brand.dart';
+import '../home/rename_dialog.dart';
 import '../home/sites_panel.dart';
 import '../youtube/youtube_screen.dart';
 import 'media_sniffer.dart';
@@ -69,6 +72,16 @@ class _BrowserScreenState extends State<BrowserScreen> {
     out.push({u:s,h:t});
   });}catch(e){}
   try{performance.getEntriesByType('resource').forEach(function(r){out.push({u:r.name,h:r.initiatorType});});}catch(e){}
+  try{document.querySelectorAll('img').forEach(function(e){
+    var s=e.currentSrc||e.src;
+    if(e.srcset){var best=0;e.srcset.split(',').forEach(function(p){var a=p.trim().split(/\\s+/);var d=parseFloat(a[1])||0;if(a[0]&&d>best){best=d;try{s=new URL(a[0],location.href).href;}catch(x){}}});}
+    if(!s||s.indexOf('data:')===0||s.indexOf('blob:')===0) return;
+    if(!e.complete||!e.naturalWidth) return;
+    out.push({u:s,h:'image',w:e.naturalWidth,ht:e.naturalHeight});
+  });}catch(e){}
+  try{document.querySelectorAll('meta[property="og:image"],meta[property="og:image:secure_url"],meta[name="twitter:image"]').forEach(function(m){
+    if(m.content){try{out.push({u:new URL(m.content,location.href).href,h:'image'});}catch(x){}}
+  });}catch(e){}
   return JSON.stringify(out);
 })()
 ''';
@@ -182,7 +195,9 @@ class _BrowserScreenState extends State<BrowserScreen> {
         if (ua is String) _sniffer.userAgent = ua;
       }
       for (final e in (jsonDecode(result) as List)) {
-        if (e is Map) {
+        if (e is Map && e['h'] == 'image') {
+          _sniffer.considerImage('${e['u']}', width: (e['w'] as num?)?.toInt(), height: (e['ht'] as num?)?.toInt());
+        } else if (e is Map) {
           _consider('${e['u']}', hint: e['h']?.toString());
         } else {
           _consider(e.toString());
@@ -242,6 +257,84 @@ class _BrowserScreenState extends State<BrowserScreen> {
     } finally {
       if (mounted) setState(() => _grabbing = false);
     }
+  }
+
+  /// Saves pictures found on the page straight from their URLs, each with
+  /// the cookies the browser would send to that image's host, the page as
+  /// referer and the browser's user agent. One image asks for a name; several
+  /// are named after the page.
+  Future<void> _downloadImages(List<SniffedImage> picked) async {
+    if (picked.isEmpty) return;
+    final services = AppScope.of(context);
+    if (services.storage.downloadDir == null) {
+      await services.storage.ensureDownloadDir(requestPermission: true);
+      if (!mounted) return;
+      if (services.storage.downloadDir == null) {
+        showSnack(context, services.storage.error ?? 'The download folder isn\'t available.', kind: ToastKind.error);
+        return;
+      }
+    }
+    String? ua;
+    try {
+      ua = (await _controller?.evaluateJavascript(source: 'navigator.userAgent'))?.toString();
+    } catch (_) {}
+    final host = Uri.tryParse(_pageUrl)?.host;
+    final title = (_pageTitle?.trim().isNotEmpty ?? false) ? _pageTitle!.trim() : (host ?? 'Image');
+    final cookiesByHost = <String, String>{};
+    final tasks = <(MediaInfo, DownloadOption)>[];
+    for (final image in picked) {
+      final imageHost = Uri.tryParse(image.url)?.host ?? '';
+      final cookie = cookiesByHost[imageHost] ??= await WebSession.cookieHeader([image.url]);
+      final info = MediaInfo(url: image.url, title: title, raw: const {}, thumbnail: image.url, extractor: host);
+      final option = DownloadOption(
+        kind: MediaKind.image,
+        label: 'Image',
+        detail: [
+          image.extension.toUpperCase(),
+          if (image.width != null && image.height != null) '${image.width}×${image.height}',
+        ].join(' · '),
+        extension: image.extension,
+        formatArgs: const [],
+        directUrl: image.url,
+        directHeaders: {
+          'Referer': _pageUrl,
+          if (ua != null && ua.isNotEmpty) 'User-Agent': ua,
+          if (cookie.isNotEmpty) 'Cookie': cookie,
+        },
+      );
+      tasks.add((info, option));
+    }
+    if (!mounted) return;
+    final names = <String>[];
+    if (tasks.length == 1) {
+      final name = await showRenameDialog(context, info: tasks.first.$1, option: tasks.first.$2);
+      if (name == null || !mounted) return;
+      names.add(name);
+    } else {
+      var base = StorageService.sanitizeFileName(title, maxLength: 100);
+      if (base.isEmpty) base = StorageService.randomFileName(audio: false, label: 'Image');
+      final taken = {...services.downloads.reservedNames};
+      for (var i = 0; i < tasks.length; i++) {
+        final name = services.storage.uniqueBaseName('$base ${i + 1}', alsoTaken: taken, kind: MediaKind.image);
+        taken.add(name.toLowerCase());
+        names.add(name);
+      }
+    }
+    for (var i = 0; i < tasks.length; i++) {
+      await services.downloads.enqueue(info: tasks[i].$1, option: tasks[i].$2, fileBaseName: names[i]);
+    }
+    if (!mounted) return;
+    final navigator = Navigator.of(context, rootNavigator: true);
+    showSnack(
+      context,
+      tasks.length == 1 ? 'Downloading ${names.first}.${tasks.first.$2.extension}' : 'Downloading ${tasks.length} images',
+      kind: ToastKind.success,
+      actionLabel: 'View',
+      onAction: () {
+        navigator.popUntil((r) => r.isFirst);
+        services.tabRequest.value = 1;
+      },
+    );
   }
 
   void _showMedia() {
@@ -320,6 +413,15 @@ class _BrowserScreenState extends State<BrowserScreen> {
                             },
                           ),
                       ],
+                    if (_sniffer.images.isNotEmpty)
+                      _ImagePicker(
+                        images: _sniffer.images.values.toList(),
+                        referer: _pageUrl,
+                        onDownload: (picked) {
+                          Navigator.pop(context);
+                          _downloadImages(picked);
+                        },
+                      ),
                   ],
                 ),
               ),
@@ -503,10 +605,10 @@ class _BrowserScreenState extends State<BrowserScreen> {
               ),
             ),
             _GrabBar(
-              mediaCount: _sniffer.found.length,
+              mediaCount: _sniffer.found.length + _sniffer.images.length,
               grabbing: _grabbing,
               onGrabPage: () => _grab(_pageUrl),
-              onShowMedia: _sniffer.found.isEmpty ? null : _showMedia,
+              onShowMedia: _sniffer.found.isEmpty && _sniffer.images.isEmpty ? null : _showMedia,
             ),
           ],
         ),
@@ -566,6 +668,153 @@ class _GrabBar extends StatelessWidget {
             ),
           ),
         ),
+      ),
+    );
+  }
+}
+
+/// The Images section of "Media found": previews to pick, then download.
+class _ImagePicker extends StatefulWidget {
+  const _ImagePicker({required this.images, required this.referer, required this.onDownload});
+
+  final List<SniffedImage> images;
+  final String referer;
+  final void Function(List<SniffedImage> picked) onDownload;
+
+  @override
+  State<_ImagePicker> createState() => _ImagePickerState();
+}
+
+class _ImagePickerState extends State<_ImagePicker> {
+  final Set<String> _picked = {};
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    final images = widget.images;
+    final all = _picked.length == images.length;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(20, 8, 20, 4),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  'Images · ${images.length}',
+                  style: theme.textTheme.labelLarge?.copyWith(color: scheme.primary, fontWeight: FontWeight.w800),
+                ),
+              ),
+              TextButton(
+                onPressed: () => setState(() {
+                  if (all) {
+                    _picked.clear();
+                  } else {
+                    _picked.addAll(images.map((i) => i.url));
+                  }
+                }),
+                child: Text(all ? 'Select none' : 'Select all'),
+              ),
+            ],
+          ),
+          LayoutBuilder(builder: (context, c) {
+            final columns = (c.maxWidth / 120).floor().clamp(3, 6);
+            return GridView.builder(
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              itemCount: images.length,
+              gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                crossAxisCount: columns,
+                mainAxisSpacing: 6,
+                crossAxisSpacing: 6,
+              ),
+              itemBuilder: (context, i) {
+                final image = images[i];
+                final picked = _picked.contains(image.url);
+                return Semantics(
+                  button: true,
+                  selected: picked,
+                  label: 'Image ${i + 1}',
+                  child: Material(
+                    color: scheme.surfaceContainerHighest,
+                    borderRadius: BorderRadius.circular(12),
+                    clipBehavior: Clip.antiAlias,
+                    child: InkWell(
+                      onTap: () => setState(() {
+                        if (!_picked.remove(image.url)) _picked.add(image.url);
+                      }),
+                      child: Stack(
+                        fit: StackFit.expand,
+                        children: [
+                          Image.network(
+                            image.url,
+                            headers: {'Referer': widget.referer},
+                            fit: BoxFit.cover,
+                            cacheWidth: 300,
+                            errorBuilder: (_, _, _) => Icon(Icons.photo_rounded, color: scheme.onSurfaceVariant),
+                          ),
+                          if (image.width != null && image.height != null)
+                            Positioned(
+                              left: 0,
+                              right: 0,
+                              bottom: 0,
+                              child: Container(
+                                color: Colors.black54,
+                                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                                child: Text(
+                                  '${image.width}×${image.height}',
+                                  textAlign: TextAlign.center,
+                                  maxLines: 1,
+                                  style: theme.textTheme.labelSmall?.copyWith(color: Colors.white),
+                                ),
+                              ),
+                            ),
+                          Positioned(
+                            right: 4,
+                            top: 4,
+                            child: Container(
+                              width: 22,
+                              height: 22,
+                              decoration: BoxDecoration(
+                                shape: BoxShape.circle,
+                                color: picked ? scheme.primary : Colors.black26,
+                                border: Border.all(color: Colors.white, width: 2),
+                              ),
+                              child: picked ? Icon(Icons.check_rounded, size: 14, color: scheme.onPrimary) : null,
+                            ),
+                          ),
+                          if (picked)
+                            DecoratedBox(
+                              decoration: BoxDecoration(
+                                border: Border.all(color: scheme.primary, width: 3),
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                            ),
+                        ],
+                      ),
+                    ),
+                  ),
+                );
+              },
+            );
+          }),
+          const SizedBox(height: 12),
+          GradientButton(
+            label: _picked.isEmpty
+                ? 'Pick images to download'
+                : _picked.length == 1
+                    ? 'Download 1 image'
+                    : 'Download ${_picked.length} images',
+            icon: Icons.download_rounded,
+            expand: true,
+            height: 48,
+            onPressed: _picked.isEmpty
+                ? null
+                : () => widget.onDownload(images.where((i) => _picked.contains(i.url)).toList()),
+          ),
+        ],
       ),
     );
   }

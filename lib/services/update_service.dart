@@ -61,7 +61,7 @@ class UpdateService extends ChangeNotifier {
   /// otherwise `universal` (same rule as DropNet).
   static String recommendedAndroidInstallType() => recommendedInstallTypeFor(DeviceEnvironment.supportedAbis);
 
-  @visibleForTesting
+  /// Also used by the "FetchNet for Android" popup, so both always agree.
   static String recommendedInstallTypeFor(List<String> abis) {
     final preferred = abis.map((e) => e.trim()).where((e) => e.isNotEmpty).firstOrNull;
     return preferred != null && _publishedAbis.contains(preferred) ? preferred : 'universal';

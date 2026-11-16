@@ -7,9 +7,10 @@ class DisclaimerText {
   static const sections = [
     (
       'FetchNet is only an interface',
-      'FetchNet is a graphical user interface for yt-dlp, an independent open-source command-line program. '
-          'FetchNet does not host, store, index, upload or distribute any media. It is not affiliated with, '
-          'endorsed by, or connected to yt-dlp or to any website or service whose content can be reached through it.'
+      'FetchNet is a graphical user interface for yt-dlp and gallery-dl, independent open-source command-line '
+          'programs. FetchNet does not host, store, index, upload or distribute any media. It is not affiliated '
+          'with, endorsed by, or connected to yt-dlp, gallery-dl or any website or service whose content can be '
+          'reached through them.'
     ),
     (
       'No support for unlawful use',
@@ -32,7 +33,7 @@ class DisclaimerText {
     ),
     (
       'Third-party content',
-      'All videos, music, trademarks and other content remain the property of their respective owners.'
+      'All videos, music, images, trademarks and other content remain the property of their respective owners.'
     ),
   ];
 }

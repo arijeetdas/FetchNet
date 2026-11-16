@@ -1,3 +1,4 @@
+import 'package:fetchnet/engine/engine.dart';
 import 'package:fetchnet/features/youtube/youtube_screen.dart';
 import 'package:fetchnet/models/media_info.dart';
 import 'package:fetchnet/services/sites_service.dart';
@@ -227,6 +228,41 @@ void main() {
       final candidates = info.youtubeThumbnailCandidates;
       expect(candidates.first.url, 'https://i.ytimg.com/vi/dQw4w9WgXcQ/maxresdefault.jpg');
       expect(candidates.any((c) => c.extension == 'webp'), isTrue);
+    });
+  });
+
+  group('Engine hints', () {
+    const yt = 'https://www.youtube.com/watch?v=dQw4w9WgXcQ';
+
+    test('words containing "age" are not mistaken for an age gate', () {
+      final hint = friendlyEngineHint('Unable to download webpage: HTTP Error 429: Too Many Requests');
+      expect(hint, contains('internet connection'));
+      expect(isSignInError('The page needs to be reloaded.'), isFalse);
+      expect(isSignInError('Sign in to confirm your age. This video may be inappropriate for some users.'), isTrue);
+    });
+
+    test('YouTube failures never point to Browser Mode', () {
+      for (final error in [
+        'Sign in to confirm you’re not a bot',
+        'unable to download video data: HTTP Error 403: Forbidden',
+        'Requested format is not available',
+      ]) {
+        expect(friendlyEngineHint(error, url: yt), isNot(contains('Browser Mode')), reason: error);
+      }
+      expect(friendlyEngineHint('HTTP Error 403: Forbidden', url: 'https://example.com/v'), contains('Browser Mode'));
+    });
+
+    test('a signed-in YouTube user is never asked to sign in', () {
+      const bot = 'Sign in to confirm you’re not a bot';
+      expect(friendlyEngineHint(bot, url: yt, signedIn: true), isNot(contains('Sign in with Google')));
+      expect(friendlyEngineHint(bot, url: yt), contains('Sign in with Google'));
+    });
+
+    test('only failures retrying cannot fix are permanent', () {
+      expect(isPermanentEngineError('Video unavailable. This video has been removed by the uploader'), isTrue);
+      expect(isPermanentEngineError("Private video. Sign in if you've been granted access"), isTrue);
+      expect(isPermanentEngineError('HTTP Error 403: Forbidden'), isFalse);
+      expect(isPermanentEngineError('Sign in to confirm you’re not a bot'), isFalse);
     });
   });
 }

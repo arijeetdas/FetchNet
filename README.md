@@ -4,13 +4,14 @@
 
 # FetchNet
 
-**A beautifully simple, cross-platform audio & video downloader, powered by [yt-dlp](https://github.com/yt-dlp/yt-dlp).**
+**A beautifully simple, cross-platform downloader for video, audio and images, powered by [yt-dlp](https://github.com/yt-dlp/yt-dlp) and [gallery-dl](https://codeberg.org/mikf/gallery-dl).**
 
 Paste a link. Pick a quality. Done.
 
 [![Flutter](https://img.shields.io/badge/Flutter-3.47-02569B?logo=flutter&logoColor=white)](https://flutter.dev)
 [![Dart](https://img.shields.io/badge/Dart-3.13-0175C2?logo=dart&logoColor=white)](https://dart.dev)
 [![Powered by yt-dlp](https://img.shields.io/badge/powered%20by-yt--dlp-7C3AED)](https://github.com/yt-dlp/yt-dlp)
+[![and gallery-dl](https://img.shields.io/badge/and-gallery--dl-9333EA)](https://codeberg.org/mikf/gallery-dl)
 [![Android](https://img.shields.io/badge/Android-7.0%2B-3DDC84?logo=android&logoColor=white)](#-installation)
 [![Windows](https://img.shields.io/badge/Windows-10%2F11-0078D4?logo=windows&logoColor=white)](#-installation)
 [![macOS · Linux](https://img.shields.io/badge/macOS%20%C2%B7%20Linux-build%20from%20source-6D28D9)](#%EF%B8%8F-building-from-source)
@@ -24,7 +25,7 @@ Paste a link. Pick a quality. Done.
 </div>
 
 > [!IMPORTANT]
-> FetchNet is **only a graphical interface** for the open-source command-line tool yt-dlp. It does not host, store or distribute any media. You alone are responsible for what you download. Only download content you own, that is in the public domain, or that you have permission to download. Read the full [disclaimer](#%EF%B8%8F-disclaimer).
+> FetchNet is **only a graphical interface** for the open-source command-line tools yt-dlp and gallery-dl. It does not host, store or distribute any media. You alone are responsible for what you download. Only download content you own, that is in the public domain, or that you have permission to download. Read the full [disclaimer](#%EF%B8%8F-disclaimer).
 
 ---
 
@@ -52,12 +53,14 @@ Paste a link. Pick a quality. Done.
 |---|---|
 | 🔗 **Paste any link** | YouTube and the thousands of other sites [supported by yt-dlp](https://github.com/yt-dlp/yt-dlp/blob/master/supportedsites.md). Links shared to FetchNet from other Android apps open straight in it. |
 | 🎚️ **Pick your quality** | Video from 144p up to 4K (merged to MP4), or audio as MP3 (320/192/128 kbps), M4A, or the original stream without re-encoding. |
+| 🖼️ **Images & posts** | Posts and galleries (Instagram, X, Reddit, Pinterest, Tumblr, Pixiv and [many more](https://github.com/mikf/gallery-dl/blob/master/docs/supportedsites.md)) via gallery-dl: every image, video and audio file in a post, with type filters and counts. Pick some or all; they're sorted into the Images, Audio and Video folders. When yt-dlp can read a video in the same post, a **Post / Video** switch offers its qualities too. |
 | ✏️ **Name it first** | Every download asks for a file name (pre-filled with the title), offers a random name, and warns before overwriting. |
-| 🌐 **Browser Mode** | Pages that can't be read directly open in a built-in browser. FetchNet finds the video and audio playing on the page, tells them apart by looking inside the files, and passes your browser sign-in to yt-dlp. |
+| 🌐 **Browser Mode** | Pages that can't be read directly open in a built-in browser. FetchNet finds the video and audio playing on the page (telling them apart by looking inside the files) and the large images on it, and passes your browser sign-in to yt-dlp and gallery-dl. |
 | 🔔 **Live notifications** | Chrome-style per-download notifications with progress, speed and Cancel, promoted to a **Live Update** on Android 16. When done, they turn into "Download complete" with Open and Share. |
-| 📁 **Saved where you expect** | `Download/FetchNet` on Android (videos appear in your gallery, audio in music apps), `~/Downloads/FetchNet` on desktop. |
+| 📁 **Saved where you expect** | `Download/FetchNet` on Android (photos and videos appear in your gallery, audio in music apps), `~/Downloads/FetchNet` on desktop, each with **Images**, **Audio** and **Video** folders: every download goes into the one for its type. |
 | 🕘 **History** | Every download is remembered, with search and filters. The Downloads tab shows what's in progress and the files still in your FetchNet folder. |
-| 🔄 **Self-updating engine** | yt-dlp updates itself daily (optional). On desktop, FFmpeg and a JavaScript runtime install in one click, with mirrors, retries and verification. |
+| 🔄 **Self-updating engines** | yt-dlp and gallery-dl update themselves daily (optional), without an app update. On desktop, FFmpeg and a JavaScript runtime install in one click, with mirrors, retries and verification. |
+| 📰 **What's new** | A one-time popup after each update shows what changed, generated from `CHANGELOG.md`. |
 | 🎨 **Made to look good** | Violet-gradient design, light / dark / system themes, a floating liquid-glass navbar on phones, a side rail on desktop, and smooth custom animations everywhere. |
 | 🪶 **Lightweight** | No state-management framework and no analytics. Desktop installers stay small because the engine downloads on first launch. |
 
@@ -67,8 +70,8 @@ Paste a link. Pick a quality. Done.
 
 | Platform | Status | Engine | Browser Mode |
 |---|---|---|---|
-| <img src="assets/platforms/android_info.svg" height="14"/> **Android 7.0+** | ✅ Supported | yt-dlp, Python, FFmpeg & QuickJS bundled in the app | ✅ Android WebView |
-| <img src="assets/platforms/windows_info.svg" height="14"/> **Windows 10 / 11** | ✅ Supported | yt-dlp downloaded on first launch; FFmpeg & Deno one click | ✅ WebView2 |
+| <img src="assets/platforms/android_info.svg" height="14"/> **Android 7.0+** | ✅ Supported | yt-dlp, Python, FFmpeg & QuickJS bundled in the app; gallery-dl downloaded from PyPI on first launch | ✅ Android WebView |
+| <img src="assets/platforms/windows_info.svg" height="14"/> **Windows 10 / 11** | ✅ Supported | yt-dlp and gallery-dl downloaded on first launch; FFmpeg & Deno one click | ✅ WebView2 |
 | <img src="assets/platforms/macOS_info.svg" height="14"/> **macOS** | 🧪 Builds from source, not yet tested on hardware | Same as Windows | ✅ WKWebView |
 | <img src="assets/platforms/linux_info.svg" height="14"/> **Linux** | 🧪 Builds from source, not yet tested on hardware | Same as Windows | ✅ WPE WebKit |
 | **iOS** | ❌ Not possible | iOS doesn't allow apps to run yt-dlp | — |
@@ -78,22 +81,26 @@ Paste a link. Pick a quality. Done.
 
 ## 🧭 How it works
 
-FetchNet never downloads anything by itself. It asks **yt-dlp** what a link contains, shows you the choices, and then tells yt-dlp exactly what to fetch, while it tracks progress and files the result.
+FetchNet never downloads anything by itself. It asks **yt-dlp** (video and audio) and, for posts and galleries, **gallery-dl** (images and every file of a post) what a link contains, shows you the choices, and then tells the engine exactly what to fetch, while it tracks progress and files the result.
 
 ```mermaid
 flowchart LR
     A["🔗 Paste a link"] --> B["yt-dlp -J<br/>(read formats)"]
+    A -->|post / gallery site| H["gallery-dl -j<br/>(list the post's files)"]
     B -->|works| C["Pick video / audio<br/>and quality"]
-    B -->|fails| D["🌐 Browser Mode<br/>(sign in, play, grab)"]
+    B -->|fails| H
+    H -->|works| I["Pick images, videos<br/>and audio of the post"]
+    H -->|fails| D["🌐 Browser Mode<br/>(sign in, play, grab)"]
     D --> B
     C --> E["✏️ Name the file"]
-    E --> F["yt-dlp downloads<br/>(+ FFmpeg merge / convert)"]
-    F --> G["📁 Download/FetchNet<br/>🔔 notification · 🕘 history"]
+    I --> E
+    E --> F["yt-dlp / gallery-dl downloads<br/>(+ FFmpeg merge / convert)"]
+    F --> G["📁 Download/FetchNet/Images · Audio · Video<br/>🔔 notification · 🕘 history"]
 ```
 
-1. **Read.** `yt-dlp -J` returns a JSON description of the media. FetchNet turns it into clean options, such as "1080p · 60 fps · MP4 · ~120 MB" or "MP3 · 320 kbps".
+1. **Read.** `yt-dlp -J` returns a JSON description of the media. FetchNet turns it into clean options, such as "1080p · 60 fps · MP4 · ~120 MB" or "MP3 · 320 kbps". For sites gallery-dl supports, `gallery-dl -j` runs alongside and lists every file of the post; when yt-dlp can't read a link, gallery-dl gets a try before an error is shown.
 2. **Choose and name.** You pick a format and a file name. FetchNet builds the exact yt-dlp format selector for it.
-3. **Download.** yt-dlp runs with a machine-readable progress template, so FetchNet can show live speed, ETA and stages ("Merging video and audio…").
+3. **Download.** yt-dlp runs with a machine-readable progress template, so FetchNet can show live speed, ETA and stages ("Merging video and audio…"). gallery-dl downloads only the picked files (`--range`) and reports each saved one ("3 of 12 files").
 4. **Finish.** The file lands in your FetchNet folder and gets registered with the system's media library (gallery and music apps). A notification and the history are updated.
 
 ---
@@ -114,8 +121,9 @@ flowchart TB
     subgraph Services["Services (ChangeNotifier)"]
         direction LR
         Fetch["FetchService"]
+        Gallery["GalleryService<br/>posts · supported sites"]
         DM["DownloadManager<br/>queue · progress · notifications"]
-        Storage["StorageService<br/>Download/FetchNet · naming"]
+        Storage["StorageService<br/>Download/FetchNet/Images · Audio · Video · naming"]
         Hist["HistoryStore<br/>SharedPreferences"]
     end
 
@@ -126,18 +134,29 @@ flowchart TB
         UE["UnsupportedEngine<br/>iOS · Web"]
     end
 
+    subgraph GEngine["GalleryDlEngine (one interface)"]
+        direction LR
+        GA["GalleryAndroidEngine<br/>PyPI wheels"]
+        GD["GalleryDesktopEngine<br/>standalone build"]
+    end
+
     subgraph Native["Native side"]
         direction LR
         K["Kotlin: MainActivity<br/>youtubedl-android<br/>(Python · yt-dlp · FFmpeg · QuickJS)"]
+        G["Kotlin: GalleryDl<br/>gallery-dl on the bundled Python"]
         N["Kotlin: DownloadNotifier<br/>+ foreground DownloadService"]
-        P["yt-dlp / FFmpeg / Deno binaries<br/>run as child processes"]
+        P["yt-dlp / gallery-dl / FFmpeg / Deno binaries<br/>run as child processes"]
         I["Installer<br/>mirrors · retries · verify · atomic swap"]
     end
 
     UI --> Services
     Fetch --> Engine
     DM --> Engine
+    Gallery --> GEngine
+    DM --> GEngine
     DM --> N
+    GA -- MethodChannel / EventChannel --> G
+    GD --> P
     AE -- MethodChannel / EventChannel --> K
     DE --> P
     DE --> I
@@ -160,18 +179,20 @@ lib/
 │   ├── engine.dart            # YtDlpEngine interface, errors, hints
 │   ├── android_engine.dart    # Kotlin bridge (youtubedl-android)
 │   ├── desktop_engine.dart    # yt-dlp as a child process
+│   ├── gallery_*_engine.dart  # gallery-dl: interface, Android (PyPI), desktop
 │   └── installer.dart         # robust downloads / installs / updates
-├── models/                    # MediaInfo (parses yt-dlp -J), downloads, history
-├── services/                  # fetch, download manager, storage, history
+├── models/                    # MediaInfo (yt-dlp -J), GalleryPost (gallery-dl -j), downloads, history, changelog
+├── services/                  # fetch, gallery, download manager, storage, history
 ├── features/
 │   ├── onboarding/            # Welcome → Disclaimer flow
-│   ├── home/                  # link card, results, rename dialog, engine banner
+│   ├── home/                  # link card, results (video/audio and posts), rename dialog, engine banner
 │   ├── browser/               # in-app browser + media sniffer
 │   ├── downloads/ history/ settings/ shell/
 └── widgets/                   # logo, loaders, liquid nav bar, toasts, dialogs
 
 android/app/src/main/kotlin/com/fetchnet/
 ├── MainActivity.kt            # engine + platform channels, share intents
+├── GalleryDl.kt               # runs gallery-dl on youtubedl-android's Python
 ├── DownloadNotifier.kt        # Chrome-style live / finished notifications
 └── DownloadService.kt         # foreground service pinned to a live notification
 ```
@@ -183,9 +204,10 @@ android/app/src/main/kotlin/com/fetchnet/
 | Component | What it does |
 |---|---|
 | `YtDlpEngine` | One interface (`run`, `start`, `cancel`, `update`, `installComponent`) with Android, desktop and unsupported implementations, so the UI never cares where yt-dlp lives. |
+| `GalleryDlEngine` | The same idea for gallery-dl (images, galleries, posts): the official standalone build on desktop (checked against Codeberg's SHA256SUMS), the official PyPI package on Android, each updated without an app update. |
 | `MediaInfo` | Turns yt-dlp's JSON into ranked video and audio options and builds the exact format selector for each. FFmpeg availability decides whether HD (merged) formats are offered. |
 | `DownloadManager` | Up to 3 concurrent downloads. Parses a custom `--progress-template`, tracks the video and audio parts of a merge, writes history, and drives the notifications. |
-| `MediaSniffer` | Browser Mode's detector. It uses element and request types, `mime=` hints, extensions, light HEAD probes, and a peek inside the media itself (MP4 track handlers, WebM codec IDs, HLS/DASH manifests) to separate video from audio. |
+| `MediaSniffer` | Browser Mode's detector. It uses element and request types, `mime=` hints, extensions, light HEAD probes, and a peek inside the media itself (MP4 track handlers, WebM codec IDs, HLS/DASH manifests) to separate video from audio. Large `<img>` pictures (300 px and up, the largest `srcset` candidate) and the page's preview image are listed as images. |
 | `Installer` | Mirrors and retries with resume, stall detection, OS-native unpacking, test-runs every binary, then swaps it in atomically (even while the old one is running on Windows). |
 | `DownloadNotifier` | One live notification per download (an Android 16 Live Update with a status-bar chip), which turns into "Download complete" (Open / Share) or "Download failed" in place. |
 
@@ -200,6 +222,18 @@ Sites change constantly, and yt-dlp's community keeps up with them better than a
 </details>
 
 <details>
+<summary><b>Why gallery-dl next to yt-dlp?</b></summary>
+
+yt-dlp is built for video and audio, so image posts, galleries and mixed posts are out of its reach. gallery-dl covers exactly those, with its own community keeping up with the sites. FetchNet runs both: yt-dlp exactly as before, gallery-dl only for sites it knows (or when yt-dlp can't read a link), and shows a **Post / Video** switch when both have something. Like yt-dlp, gallery-dl updates at runtime, never through an app update.
+</details>
+
+<details>
+<summary><b>Android: gallery-dl on yt-dlp's Python</b></summary>
+
+gallery-dl is pure Python, and youtubedl-android already unpacks Python 3.12 (with ssl and sqlite3) for yt-dlp. So instead of shipping a second interpreter, FetchNet downloads the official gallery-dl wheel and its pure-Python dependencies (`requests`, `urllib3`, `idna`, `certifi`, `charset-normalizer`) from PyPI, checks each against PyPI's SHA-256, and runs `python -m gallery_dl` with the same environment youtubedl-android gives yt-dlp. Updates unpack into a fresh folder and are test-run before they replace the working copy.
+</details>
+
+<details>
 <summary><b>Android: bundle Python + yt-dlp via youtubedl-android</b></summary>
 
 Android can't run the desktop yt-dlp binary. [youtubedl-android](https://github.com/JunkFood02/youtubedl-android) ships a Python runtime, yt-dlp, FFmpeg and QuickJS (needed for YouTube) as native libraries. That's about 50 MB per CPU architecture, so FetchNet is published as **per-ABI APKs** (`arm64-v8a`, `armeabi-v7a`, `x86_64`), and the About popup recommends the right one for your device.
@@ -208,13 +242,13 @@ Android can't run the desktop yt-dlp binary. [youtubedl-android](https://github.
 <details>
 <summary><b>Desktop: download the engine on first launch</b></summary>
 
-Instead of bundling a 20+ MB binary (and an even larger FFmpeg) into every installer, FetchNet downloads the **official** yt-dlp release on first launch and offers FFmpeg and Deno as optional one-click add-ons. Installers stay small, and each component updates independently.
+Instead of bundling 20+ MB binaries (and an even larger FFmpeg) into every installer, FetchNet downloads the **official** yt-dlp and gallery-dl releases on first launch and offers FFmpeg and Deno as optional one-click add-ons. Installers stay small, and each component updates independently.
 </details>
 
 <details>
 <summary><b>Installs that don't fail</b></summary>
 
-Every download has backup sources: yt-dlp stable → nightly; FFmpeg from yt-dlp's builds → BtbN → gyan.dev; Deno from GitHub → dl.deno.land. Downloads retry with backoff and resume from where they stopped. Archives are unpacked with the OS's own tool, and every binary is **test-run before it's installed**. Replacing a binary that's in use works too: the old one is renamed aside, which Windows allows.
+Every download has backup sources: yt-dlp stable → nightly; gallery-dl stable (Codeberg, checksum-verified) → nightly; FFmpeg from yt-dlp's builds → BtbN → gyan.dev; Deno from GitHub → dl.deno.land. Downloads retry with backoff and resume from where they stopped. Archives are unpacked with the OS's own tool, and every binary is **test-run before it's installed**. Replacing a binary that's in use works too: the old one is renamed aside, which Windows allows.
 </details>
 
 <details>
@@ -238,7 +272,7 @@ State lives in a few `ChangeNotifier` services exposed through an `InheritedWidg
 <details>
 <summary><b>Files where users expect them</b></summary>
 
-Downloads go to the public `Download/FetchNet` folder (created on first run). Each finished file is registered with Android's MediaScanner, so videos show up in Gallery / Photos and audio in music and file-manager apps. yt-dlp's partial files stay in app-private temp storage until they're complete.
+Downloads go to the public `Download/FetchNet` folder (created on first run), sorted into `Images`, `Audio` and `Video` folders by file type; files saved before the type folders existed stay where they are and still show in Downloads. Each finished file is registered with Android's MediaScanner, so photos and videos show up in Gallery / Photos and audio in music and file-manager apps. A post's files are sorted by type too, with a folder named after the post wherever it adds more than one file. yt-dlp's partial files stay in app-private temp storage until they're complete.
 </details>
 
 ---
@@ -269,14 +303,14 @@ FetchNet was built with **AI assistance**. **Claude** (by [Anthropic](https://ww
 
 1. Download FetchNet for Windows from **[fetchnet.arijeet.in](https://fetchnet.arijeet.in)** and extract or install it.
 2. Run `FetchNet.exe`. If SmartScreen shows *"Windows protected your PC"*, choose **More info → Run anyway**. New publishers get this until they build up reputation.
-3. On first launch FetchNet downloads the **yt-dlp** engine (~23 MB, one time).
-4. For HD video and MP3, click **Install** on the *"Unlock HD video and MP3"* banner to add **FFmpeg**. For full YouTube quality options, install the **JavaScript runtime** (Deno) in Settings → Engine. If Node.js, Deno or Bun is already on your PATH, FetchNet uses it automatically.
+3. On first launch FetchNet downloads the **yt-dlp** engine (~23 MB, one time), then **gallery-dl** (~23 MB) in the background for images and posts.
+4. For HD video and MP3, click **Install** on the *"Unlock HD video and MP3"* banner to add **FFmpeg**. For full YouTube quality options, install the **JavaScript runtime** (Deno) in Settings → Engines. If Node.js, Deno or Bun is already on your PATH, FetchNet uses it automatically.
 
-Downloads are saved to `%USERPROFILE%\Downloads\FetchNet`.
+Downloads are saved to `%USERPROFILE%\Downloads\FetchNet`, in its `Images`, `Audio` and `Video` folders.
 
 ### <img src="assets/platforms/macOS_info.svg" height="16"/> macOS &nbsp;·&nbsp; <img src="assets/platforms/linux_info.svg" height="16"/> Linux
 
-No prebuilt release yet. [Build from source](#%EF%B8%8F-building-from-source) (it takes a few commands). On first launch the engine and add-ons install just as on Windows. Downloads go to `~/Downloads/FetchNet`.
+No prebuilt release yet. [Build from source](#%EF%B8%8F-building-from-source) (it takes a few commands). On first launch the engine and add-ons install just as on Windows. Downloads go to `~/Downloads/FetchNet` (`Images`, `Audio` and `Video` folders).
 
 ---
 
@@ -426,19 +460,19 @@ All app icons (Android adaptive and themed, iOS/macOS asset catalogs and `AppIco
 <details>
 <summary><b>"Couldn't get this media" / "Unsupported URL"</b></summary>
 
-Try **Browser Mode**: open the page, sign in if needed, press play, then tap **Grab this page** or pick the file under **Media found**. On desktop you can also use **"Use browser sign-in"** to reuse cookies from Firefox, Chrome, Edge and others.
+Try **Browser Mode**: open the page, sign in if needed, press play, then tap **Grab this page** or pick the file (or the images) under **Media found**. On desktop you can also use **"Use browser sign-in"** to reuse cookies from Firefox, Chrome, Edge and others.
 </details>
 
 <details>
 <summary><b>A site that used to work suddenly fails</b></summary>
 
-The site probably changed. Go to **Settings → Engine → Update** to fetch the latest yt-dlp (and keep "Keep yt-dlp up to date" on).
+The site probably changed. Go to **Settings → Engines** and tap **Check for updates** under yt-dlp (videos and audio) or gallery-dl (images and posts), and keep "Keep engines up to date" on in Settings.
 </details>
 
 <details>
 <summary><b>Only low qualities (360p) on desktop</b></summary>
 
-HD on YouTube and many other sites comes as separate video and audio streams that need **FFmpeg** to merge. Install it from the Home banner or Settings → Engine. For YouTube, also install the **JavaScript runtime**.
+HD on YouTube and many other sites comes as separate video and audio streams that need **FFmpeg** to merge. Install it from the Home banner or Settings → Engines. For YouTube, also install the **JavaScript runtime**.
 </details>
 
 <details>
@@ -466,11 +500,11 @@ An installed copy is signed with a different key. Uninstall it and install the n
 > [!WARNING]
 > **Please read carefully.** You accept these terms inside the app before you can use it.
 
-1. **FetchNet is only an interface.** FetchNet is a graphical user interface for yt-dlp, an independent open-source command-line program. FetchNet does not host, store, index, upload or distribute any media. It is not affiliated with, endorsed by, or connected to yt-dlp or to any website or service whose content can be reached through it.
+1. **FetchNet is only an interface.** FetchNet is a graphical user interface for yt-dlp and gallery-dl, independent open-source command-line programs. FetchNet does not host, store, index, upload or distribute any media. It is not affiliated with, endorsed by, or connected to yt-dlp, gallery-dl or any website or service whose content can be reached through them.
 2. **No support for unlawful use.** FetchNet does not encourage, promote or condone copyright infringement, piracy, circumvention of technical protection measures, violation of any website's terms of service, or any other illegal or harmful activity.
 3. **You are solely responsible.** You alone are responsible for how you use FetchNet and for anything you download with it. Only download content that you own, that is in the public domain, that is licensed for downloading, or that you have clear permission from the rights holder to download. Make sure your use complies with copyright law and every other law and regulation that applies to you, as well as the terms of the services you access.
 4. **No warranty, no liability.** FetchNet is provided "as is", without warranty of any kind. The developer accepts no liability for any misuse of the app, or for any legal claims, damages, data loss, account restrictions or other consequences arising from its use.
-5. **Third-party content.** All videos, music, trademarks and other content remain the property of their respective owners.
+5. **Third-party content.** All videos, music, images, trademarks and other content remain the property of their respective owners.
 
 ---
 
@@ -483,10 +517,13 @@ FetchNet stands on the shoulders of these projects. Thank you to everyone who bu
 | Project | Role in FetchNet | License |
 |---|---|---|
 | [**yt-dlp**](https://github.com/yt-dlp/yt-dlp) | The heart of FetchNet: site support, format selection, downloading | Unlicense |
+| [**gallery-dl**](https://codeberg.org/mikf/gallery-dl) | Images, galleries and posts: listing every file of a post and downloading the picked ones | GPL-2.0 |
+| [**gdl-org/builds**](https://github.com/gdl-org/builds) | gallery-dl's nightly standalone builds (the macOS build, and the fallback elsewhere) | GPL-2.0 |
+| [**requests**](https://github.com/psf/requests), [urllib3](https://github.com/urllib3/urllib3), [idna](https://github.com/kjd/idna), [certifi](https://github.com/certifi/python-certifi), [charset-normalizer](https://github.com/jawah/charset_normalizer) | gallery-dl's Python dependencies, downloaded from PyPI on Android | Apache-2.0 / MIT / BSD-3-Clause / MPL-2.0 / MIT |
 | [**youtubedl-android**](https://github.com/JunkFood02/youtubedl-android) (originally by [yausername](https://github.com/yausername/youtubedl-android)) | Runs yt-dlp on Android, with bundled Python, FFmpeg and QuickJS | GPL-3.0 |
 | [**FFmpeg**](https://ffmpeg.org) | Merging video and audio, converting to MP3/M4A, metadata | LGPL-2.1+ / GPL-2.0+ (depending on the build) |
 | [**yt-dlp/FFmpeg-Builds**](https://github.com/yt-dlp/FFmpeg-Builds), [**BtbN/FFmpeg-Builds**](https://github.com/BtbN/FFmpeg-Builds), [**gyan.dev**](https://www.gyan.dev/ffmpeg/builds/), [**martin-riedl.de**](https://ffmpeg.martin-riedl.de) | Prebuilt FFmpeg binaries downloaded by the desktop app | MIT (build scripts); FFmpeg's own license for binaries |
-| [**Python**](https://www.python.org) | Runs yt-dlp on Android (via youtubedl-android) | PSF License |
+| [**Python**](https://www.python.org) | Runs yt-dlp and gallery-dl on Android (via youtubedl-android) | PSF License |
 | [**QuickJS**](https://bellard.org/quickjs/) | JavaScript runtime yt-dlp uses for YouTube on Android | MIT |
 | [**Deno**](https://github.com/denoland/deno) | Optional JavaScript runtime for YouTube on desktop | MIT |
 
@@ -501,7 +538,7 @@ FetchNet stands on the shoulders of these projects. Thank you to everyone who bu
 | [package_info_plus](https://pub.dev/packages/package_info_plus) | Showing the installed version | BSD-3-Clause |
 | [flutter_svg](https://pub.dev/packages/flutter_svg) | The app glyph and platform logos | MIT |
 | [flutter_inappwebview](https://pub.dev/packages/flutter_inappwebview) | Browser Mode's in-app browser and cookie access | Apache-2.0 |
-| [archive](https://pub.dev/packages/archive) | Fallback unpacking of FFmpeg/Deno downloads | MIT |
+| [archive](https://pub.dev/packages/archive) | Unpacking gallery-dl's Python packages, and fallback unpacking of FFmpeg/Deno downloads | MIT |
 | [path](https://pub.dev/packages/path) | Cross-platform path handling | BSD-3-Clause |
 | [cupertino_icons](https://pub.dev/packages/cupertino_icons) | iOS-style icon font | MIT |
 | [flutter_lints](https://pub.dev/packages/flutter_lints) | Lint rules (development only) | BSD-3-Clause |
@@ -527,7 +564,7 @@ Android, Windows, macOS, iOS, Linux, YouTube and all other product names, logos 
 A license for FetchNet's own source code hasn't been published yet. Until one is added, all rights are reserved by the author.
 
 > [!NOTE]
-> The Android app bundles **youtubedl-android**, which is licensed under **GPL-3.0**. Anyone redistributing FetchNet's Android build must comply with the GPL-3.0 terms of that component (and with FFmpeg's license).
+> The Android app bundles **youtubedl-android**, which is licensed under **GPL-3.0**. Anyone redistributing FetchNet's Android build must comply with the GPL-3.0 terms of that component (and with FFmpeg's license). gallery-dl (GPL-2.0) isn't bundled: FetchNet downloads the official release at runtime.
 
 ---
 
@@ -549,6 +586,6 @@ A license for FetchNet's own source code hasn't been published yet. Until one is
 
 <img src="docs/images/fetchnet-readme-icon.png" alt="" width="40" />
 
-<sub>Made with 💜 using Flutter · Powered by yt-dlp</sub>
+<sub>Made with 💜 using Flutter · Powered by yt-dlp & gallery-dl</sub>
 
 </div>

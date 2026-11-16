@@ -14,6 +14,7 @@ import '../downloads/downloads_screen.dart';
 import '../history/history_screen.dart';
 import '../home/home_screen.dart';
 import '../settings/settings_screen.dart';
+import 'whats_new_dialog.dart';
 
 /// Breakpoints shared by every screen.
 class Breakpoints {
@@ -62,7 +63,14 @@ class _HomeShellState extends State<HomeShell> {
     _index = _navTarget = _services.tabRequest.value;
     _services.tabRequest.addListener(_onTabRequest);
     _services.updates.addListener(_onUpdateState);
-    WidgetsBinding.instance.addPostFrameCallback((_) => _onUpdateState());
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _onUpdateState();
+      // Once the shell has settled: the first launch after an update shows
+      // what changed (fresh installs never do).
+      Future<void>.delayed(const Duration(milliseconds: 700), () {
+        if (mounted) maybeShowWhatsNew(context, _services);
+      });
+    });
   }
 
   @override

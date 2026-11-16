@@ -292,10 +292,12 @@ class _WelcomePageState extends State<_WelcomePage> with TickerProviderStateMixi
       AnimationController(vsync: this, duration: const Duration(milliseconds: 1100))..forward();
 
   static const _features = [
-    (Icons.link_rounded, 'Paste any link', 'YouTube and 1000+ other sites supported by yt-dlp.'),
+    (Icons.link_rounded, 'Paste any link', 'YouTube and 1000+ other sites via yt-dlp, plus posts and galleries via gallery-dl.'),
     (Icons.high_quality_rounded, 'Pick your quality', 'Video up to 4K, or MP3 / M4A audio.'),
-    (Icons.travel_explore_rounded, 'Browser Mode', 'Open tricky pages in the built-in browser and grab the media there.'),
-    (Icons.photo_library_rounded, 'Right where you expect', 'Saved to Download/FetchNet — videos show up in your gallery.'),
+    (Icons.collections_rounded, 'Images & posts', 'Every image, video and audio file in a post. Save some or all of them.'),
+    (Icons.travel_explore_rounded, 'Browser Mode', 'Open tricky pages in the built-in browser and grab the videos, audio or images there.'),
+    (Icons.photo_library_rounded, 'Right where you expect', 'Saved to Download/FetchNet, sorted into Images, Audio and Video folders.'),
+    (Icons.autorenew_rounded, 'Always up to date', 'yt-dlp and gallery-dl update themselves, no app update needed.'),
   ];
 
   @override
@@ -386,7 +388,8 @@ class _WelcomePageState extends State<_WelcomePage> with TickerProviderStateMixi
                   _reveal(
                     2,
                     Text(
-                      'Save the videos and music you love — beautifully simple, powered by the open-source yt-dlp engine.',
+                      'Save the videos, music and images you love — beautifully simple, powered by the open-source '
+                      'yt-dlp and gallery-dl engines.',
                       textAlign: TextAlign.center,
                       style: theme.textTheme.bodyLarge?.copyWith(color: scheme.onSurfaceVariant, height: 1.5),
                     ),
@@ -399,7 +402,7 @@ class _WelcomePageState extends State<_WelcomePage> with TickerProviderStateMixi
                       spacing: 8,
                       runSpacing: 8,
                       children: const [
-                        _Pill(icon: Icons.memory_rounded, text: 'Powered by yt-dlp'),
+                        _Pill(icon: Icons.memory_rounded, text: 'Powered by yt-dlp & gallery-dl'),
                         _Pill(icon: Icons.public_rounded, text: '1000+ sites'),
                         _Pill(icon: Icons.lock_outline_rounded, text: 'No account needed'),
                       ],

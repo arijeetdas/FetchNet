@@ -7,4 +7,6 @@ IconData kindIcon(MediaKind kind) => switch (kind) {
       MediaKind.video => Icons.movie_rounded,
       MediaKind.audio => Icons.music_note_rounded,
       MediaKind.thumbnail => Icons.image_rounded,
+      MediaKind.image => Icons.photo_rounded,
+      MediaKind.post => Icons.photo_library_rounded,
     };

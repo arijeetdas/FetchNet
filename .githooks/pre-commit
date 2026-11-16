@@ -1,0 +1,31 @@
+#!/bin/sh
+# FetchNet pre-commit hook: keeps the changelog in step with the version.
+#
+# Enabled with:  git config core.hooksPath .githooks
+#
+# - The commit changes the `version:` line of pubspec.yaml: the notes under
+#   "## Unreleased" in CHANGELOG.md are filed under the new version (commit
+#   subjects since the last bump when there are none). Then the app's
+#   assets/whats_new.json (this version's notes only, for the one-time
+#   "What's new" popup) and the website's src/config/changelog.json are
+#   regenerated.
+# - The commit touches CHANGELOG.md: both are regenerated.
+# Anything else commits untouched.
+
+staged=$(git diff --cached --name-only)
+case "$staged" in
+  *pubspec.yaml*|*CHANGELOG.md*) ;;
+  *) exit 0 ;;
+esac
+
+old=$(git show HEAD:pubspec.yaml 2>/dev/null | sed -n 's/^version:[[:space:]]*//p' | tr -d '\r')
+new=$(git show :pubspec.yaml 2>/dev/null | sed -n 's/^version:[[:space:]]*//p' | tr -d '\r')
+
+if [ -n "$new" ] && [ "$old" != "$new" ]; then
+  echo "changelog: version $old -> $new"
+  dart run tool/changelog.dart release --version "$new" || exit 1
+else
+  dart run tool/changelog.dart sync --version "$new" || exit 1
+fi
+
+git add CHANGELOG.md assets/whats_new.json

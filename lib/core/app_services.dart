@@ -3,7 +3,9 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../engine/engine.dart';
+import '../engine/gallery_engine.dart';
 import '../services/cover_art.dart';
+import '../services/gallery_service.dart';
 import '../services/download_manager.dart';
 import '../services/fetch_service.dart';
 import '../services/history_store.dart';
@@ -29,6 +31,7 @@ class AppServices {
     required this.youtube,
     required this.sites,
     required this.youtubeStreams,
+    required this.gallery,
   })  : themeMode = ValueNotifier(prefs.themeMode),
         showAnimations = ValueNotifier(prefs.showAnimations);
 
@@ -39,20 +42,25 @@ class AppServices {
     final history = HistoryStore(prefs);
     final youtube = YouTubeService(prefs, youtubeClient ?? YouTubeClient());
 
-    // The browser's cookies for a link, offered to yt-dlp when an anonymous
-    // fetch fails. YouTube only when the user signed in with Google.
+    // The browser's cookies for a link, offered to yt-dlp and gallery-dl when
+    // an anonymous lookup or download is refused. YouTube (and YouTube Music)
+    // only when the user signed in with Google.
     Future<List<String>> cookieArgs(String url) async {
       if (!WebSession.isSupported) return const [];
-      if (isYouTubeUrl(url) && !youtube.signedIn) return const [];
+      if (isYouTubeLink(url) && !youtube.signedIn) return const [];
       return WebSession.cookieArgs(url, await storage.workDir('cookies'));
     }
+
+    final galleryEngine = GalleryDlEngine.create(prefs, engine);
 
     return AppServices._(
       prefs: prefs,
       engine: engine,
       storage: storage,
       history: history,
+      gallery: GalleryService(galleryEngine, prefs, cookieArgs: cookieArgs),
       downloads: DownloadManager(
+        gallery: galleryEngine,
         engine: engine,
         storage: storage,
         history: history,
@@ -64,6 +72,7 @@ class AppServices {
           music: youtube.musicCoverArt,
           video: youtube.videoCoverArt,
         ),
+        cookieArgs: cookieArgs,
       ),
       fetcher: FetchService(engine, cookieArgs: cookieArgs),
       youtube: youtube,
@@ -84,6 +93,9 @@ class AppServices {
 
   /// Playable YouTube streams from yt-dlp (watch page, downloads).
   final YtStreamResolver youtubeStreams;
+
+  /// gallery-dl: posts, galleries and images.
+  final GalleryService gallery;
   final UpdateService updates = UpdateService();
   final ValueNotifier<ThemeMode> themeMode;
 
@@ -123,6 +135,9 @@ class AppServices {
     _started = true;
     unawaited(storage.ensureDownloadDir(requestPermission: true));
     unawaited(engine.initialize());
+    // gallery-dl sets itself up in the background (after yt-dlp on Android,
+    // whose Python it uses). yt-dlp works the same whether this succeeds.
+    if (prefs.galleryEnabled) unawaited(gallery.engine.initialize());
     unawaited(youtube.refresh());
     unawaited(updates.check());
 

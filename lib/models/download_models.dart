@@ -21,7 +21,9 @@ class DownloadTask {
   final String title;
   final String fileBaseName;
   final DownloadOption option;
-  final List<String> requestArgs;
+
+  /// Grows the browser's cookies when an automatic retry needs a sign-in.
+  List<String> requestArgs;
 
   /// Post-processing picked from settings (e.g. embedded cover art).
   final List<String> extraArgs;
@@ -39,6 +41,10 @@ class DownloadTask {
   int? eta; // seconds
   String? stage; // e.g. "Merging video and audio"
   String? filePath;
+
+  /// Every saved file of a post (gallery-dl), first one = [filePath].
+  List<String> files = const [];
+  int filesDone = 0;
   String? error;
   String? errorHint;
 
@@ -72,6 +78,7 @@ class HistoryEntry {
     this.extractor,
     this.error,
     this.completedAt,
+    this.files = const [],
   });
 
   final String id;
@@ -91,6 +98,13 @@ class HistoryEntry {
   final String? extractor;
   final String? error;
 
+  /// Every file of a post download ([filePath] is the first one). Empty for
+  /// single-file downloads (and entries from older versions).
+  final List<String> files;
+
+  /// The files of this entry that are on disk.
+  List<String> get allFiles => files.isNotEmpty ? files : [?filePath];
+
   Map<String, dynamic> toJson() => {
         'id': id,
         'url': url,
@@ -106,6 +120,7 @@ class HistoryEntry {
         if (thumbnail != null) 'thumbnail': thumbnail,
         if (extractor != null) 'extractor': extractor,
         if (error != null) 'error': error,
+        if (files.isNotEmpty) 'files': files,
       };
 
   static HistoryEntry? fromJson(Map<String, dynamic> j) {
@@ -125,6 +140,7 @@ class HistoryEntry {
         thumbnail: j['thumbnail'] as String?,
         extractor: j['extractor'] as String?,
         error: j['error'] as String?,
+        files: [for (final f in (j['files'] as List?) ?? const []) if (f is String) f],
       );
     } catch (_) {
       return null;

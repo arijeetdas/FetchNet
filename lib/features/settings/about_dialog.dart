@@ -2,33 +2,42 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../../core/platform/device_environment.dart';
+import '../../services/update_service.dart';
 import '../../widgets/app_dialog.dart';
 import '../../widgets/brand.dart';
 import '../../widgets/platform_logo.dart';
 import '../shell/update_banner.dart';
 
-/// Recommended Android build for this device's preferred ABI, or `Universal`.
-String recommendedAndroidBuild() {
-  const known = {'arm64-v8a', 'armeabi-v7a', 'x86_64', 'x86'};
-  final abis = DeviceEnvironment.supportedAbis;
-  if (abis.isEmpty) return 'Universal';
-  return known.contains(abis.first) ? abis.first : 'Universal';
+/// Recommended Android build for this device: the same rule as the update
+/// link (the preferred ABI when FetchNet publishes a build for it,
+/// otherwise `Universal`).
+String recommendedAndroidBuild() => recommendedAndroidBuildFor(DeviceEnvironment.supportedAbis);
+
+@visibleForTesting
+String recommendedAndroidBuildFor(List<String> abis) {
+  final type = UpdateService.recommendedInstallTypeFor(abis);
+  return type == 'universal' ? 'Universal' : type;
 }
 
-String installedAndroidBuild() {
-  final raw = DeviceEnvironment.installedApkType;
-  return switch (raw) {
-    'arm64-v8a' || 'arm-v8a' => 'arm64-v8a',
-    'armeabi-v7a' || 'arm-v7a' => 'armeabi-v7a',
-    'x86_64' => 'x86_64',
-    'x86' => 'x86',
-    _ => 'Universal',
-  };
-}
+String installedAndroidBuild() => installedAndroidBuildFor(DeviceEnvironment.installedApkType);
+
+/// The installed APK's build, named like the published ones.
+@visibleForTesting
+String installedAndroidBuildFor(String raw) => switch (raw.trim().toLowerCase()) {
+      'arm64-v8a' || 'arm-v8a' => 'arm64-v8a',
+      'armeabi-v7a' || 'arm-v7a' => 'armeabi-v7a',
+      'x86_64' => 'x86_64',
+      'x86' => 'x86',
+      _ => 'Universal',
+    };
 
 /// "FetchNet for [platform]" popup: version, Android build type advice,
 /// and Check for Updates (opens the website in the system browser).
-Future<void> showFetchNetAboutDialog(BuildContext context, {required String version}) {
+Future<void> showFetchNetAboutDialog(BuildContext context, {required String version}) async {
+  // The startup query may not have answered in time: without the device's
+  // ABIs the popup would show Universal / Universal.
+  await DeviceEnvironment.ensureLoaded();
+  if (!context.mounted) return;
   return showFetchNetDialog<void>(
     context: context,
     barrierDismissible: true,

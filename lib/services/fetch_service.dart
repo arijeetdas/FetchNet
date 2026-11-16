@@ -73,7 +73,10 @@ class FetchService {
     if (wasCancelled || result.cancelled) throw FetchException('Cancelled', cancelled: true);
     if (!result.ok || result.stdout.trim().isEmpty) {
       final message = extractEngineError(result.stderr.isEmpty ? result.stdout : result.stderr);
-      throw FetchException(message, hint: friendlyEngineHint(message));
+      throw FetchException(
+        message,
+        hint: friendlyEngineHint(message, url: url, signedIn: requestArgs.contains('--cookies')),
+      );
     }
     try {
       return MediaInfo.parse(result.stdout, sourceUrl: url, requestArgs: requestArgs);

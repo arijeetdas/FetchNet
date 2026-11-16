@@ -121,7 +121,7 @@ class _DownloadSheetState extends State<_DownloadSheet> {
                   key: const ValueKey('loading'),
                   loader: true,
                   title: widget.title ?? 'Reading the video…',
-                  message: 'yt-dlp is looking up the available qualities.',
+                  message: 'Looking up the available formats. This can take a few seconds.',
                   thumbnail: widget.thumbnail,
                 );
               }

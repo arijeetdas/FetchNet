@@ -8,8 +8,10 @@ import '../../core/app_services.dart';
 import '../../core/format.dart';
 import '../../core/platform/device_environment.dart';
 import '../../engine/engine.dart';
+import '../../models/gallery_models.dart';
 import '../../models/media_info.dart';
 import '../../services/fetch_service.dart';
+import '../../services/gallery_service.dart';
 import '../../services/sites_service.dart';
 import '../../services/web_session.dart';
 import '../../widgets/app_dialog.dart';
@@ -22,6 +24,7 @@ import '../youtube/youtube_screen.dart';
 import '../youtube/youtube_settings_screen.dart';
 import 'engine_banner.dart';
 import 'media_result_view.dart';
+import 'post_result_view.dart';
 import 'sites_panel.dart';
 
 enum _Phase { idle, loading, error, result }
@@ -40,6 +43,13 @@ class _HomeScreenState extends State<HomeScreen> {
 
   _Phase _phase = _Phase.idle;
   MediaInfo? _info;
+
+  /// What gallery-dl found at the link (files of a post), next to or
+  /// instead of yt-dlp's [_info].
+  GalleryPost? _post;
+
+  /// gallery-dl is still looking while yt-dlp's result is shown.
+  bool _postLoading = false;
   FetchException? _error;
   String? _lastUrl;
   List<String> _lastArgs = const [];
@@ -103,39 +113,164 @@ class _HomeScreenState extends State<HomeScreen> {
       _lastUrl = url;
       _lastArgs = requestArgs;
     });
+    // Sites gallery-dl knows (posts, galleries) are looked up by both engines
+    // at once; yt-dlp's answer shows first and the post joins it.
+    final gallery = _services.gallery;
+    final galleryAllowed = gallery.enabled && !isYouTubeLink(url);
+    Future<GalleryPost>? post =
+        galleryAllowed && await gallery.supports(url) == true ? gallery.fetch(url, requestArgs: requestArgs) : null;
+    post?.ignore(); // Errors are read below; never unhandled.
+    if (!mounted || token != _requestToken) return;
+
+    MediaInfo info;
     try {
-      final info = await _services.fetcher.fetch(url, requestArgs: requestArgs);
-      if (!mounted || token != _requestToken) return;
-      setState(() {
-        _info = info;
-        _phase = _Phase.result;
-      });
+      info = await _services.fetcher.fetch(url, requestArgs: requestArgs);
     } on FetchException catch (e) {
       if (!mounted || token != _requestToken) return;
       if (e.cancelled) {
-        setState(() => _phase = _info == null ? _Phase.idle : _Phase.result);
+        setState(() => _phase = _hasResult ? _Phase.result : _Phase.idle);
         return;
       }
-      setState(() {
-        _error = e;
-        _phase = _Phase.error;
-      });
+      // yt-dlp couldn't read it: gallery-dl may (image posts, galleries).
+      if (post == null && galleryAllowed && _worthTryingGallery(e)) {
+        post = gallery.fetch(url, requestArgs: requestArgs);
+      }
+      if (post == null) {
+        setState(() {
+          _error = e;
+          _phase = _Phase.error;
+        });
+        return;
+      }
+      try {
+        final found = await post;
+        if (!mounted || token != _requestToken) return;
+        setState(() {
+          _info = null;
+          _post = found;
+          _postLoading = false;
+          _phase = _Phase.result;
+        });
+      } on FetchException catch (g) {
+        if (!mounted || token != _requestToken) return;
+        if (g.cancelled) {
+          setState(() => _phase = _hasResult ? _Phase.result : _Phase.idle);
+          return;
+        }
+        setState(() {
+          _error = galleryErrorExplainsBetter(e, g) ? g : e;
+          _phase = _Phase.error;
+        });
+      }
+      return;
     }
+    if (!mounted || token != _requestToken) return;
+    setState(() {
+      _info = info;
+      _post = null;
+      _postLoading = post != null;
+      _phase = _Phase.result;
+    });
+    if (post == null) return;
+    try {
+      final found = await post;
+      if (!mounted || token != _requestToken) return;
+      // A profile's list of posts adds nothing to yt-dlp's own result.
+      setState(() {
+        _post = found.items.isEmpty ? null : found;
+        _postLoading = false;
+      });
+    } catch (_) {
+      if (mounted && token == _requestToken) setState(() => _postLoading = false);
+    }
+  }
+
+  bool get _hasResult => _info != null || _post != null;
+
+  /// Network trouble won't be different for gallery-dl.
+  static bool _worthTryingGallery(FetchException e) {
+    final m = e.message.toLowerCase();
+    return !(m.contains('getaddrinfo') || m.contains('timed out') || m.contains('network is unreachable') ||
+        m.contains('is not a valid url') || m.contains('private video'));
   }
 
   void _cancelFetch() {
     _requestToken++;
     _services.fetcher.cancel();
-    setState(() => _phase = _info == null ? _Phase.idle : _Phase.result);
+    _services.gallery.cancel();
+    setState(() {
+      _postLoading = false;
+      _phase = _hasResult ? _Phase.result : _Phase.idle;
+    });
   }
 
   void _clear() {
     _controller.clear();
+    _services.gallery.cancel();
     setState(() {
       _phase = _Phase.idle;
       _info = null;
+      _post = null;
+      _postLoading = false;
       _error = null;
     });
+  }
+
+  /// yt-dlp's result, gallery-dl's post, or both behind a switch.
+  Widget _buildResult() {
+    final info = _info;
+    final post = _post;
+    final Widget? media = info == null
+        ? null
+        : info.isPlaylist
+            ? _PlaylistView(
+                key: ValueKey('pl-${info.url}'),
+                info: info,
+                onPick: (entry) {
+                  _controller.text = entry.url;
+                  _fetch(url: entry.url, requestArgs: info.requestArgs);
+                },
+              )
+            : MediaResultView(key: ValueKey('res-${info.url}-${info.title}'), info: info);
+    final Widget? postView = post == null
+        ? null
+        : PostResultView(
+            key: ValueKey('post-${post.url}'),
+            post: post,
+            onOpenChild: (url) {
+              _controller.text = url;
+              _fetch(url: url, requestArgs: post.requestArgs);
+            },
+          );
+    final Widget body;
+    if (media != null && postView != null) {
+      body = PostOrMediaSwitch(key: ValueKey('both-${post!.url}'), post: post, postView: postView, mediaView: media);
+    } else {
+      body = media ?? postView!;
+    }
+    if (!_postLoading) return body;
+    final theme = Theme.of(context);
+    return Column(
+      key: ValueKey('loading-post-${info?.url}'),
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        body,
+        const SizedBox(height: 10),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const EnergyLoader(size: 20),
+            const SizedBox(width: 10),
+            Flexible(
+              child: Text(
+                'Looking for images and other files in this post…',
+                style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+              ),
+            ),
+          ],
+        ),
+      ],
+    );
   }
 
   Future<void> _openBrowserMode([String? url]) async {
@@ -308,20 +443,10 @@ class _HomeScreenState extends State<HomeScreen> {
                             ? _openYouTubeSettings
                             : null,
                       ),
-                      _Phase.result =>
-                        _info!.isPlaylist
-                            ? _PlaylistView(
-                                key: ValueKey('pl-${_info!.url}'),
-                                info: _info!,
-                                onPick: (entry) {
-                                  _controller.text = entry.url;
-                                  _fetch(url: entry.url, requestArgs: _info!.requestArgs);
-                                },
-                              )
-                            : MediaResultView(key: ValueKey('res-${_info!.url}-${_info!.title}'), info: _info!),
+                      _Phase.result => _buildResult(),
                     },
                   ),
-                  if (_phase == _Phase.result && !_info!.isPlaylist)
+                  if (_phase == _Phase.result && !(_info?.isPlaylist ?? false) && _post?.items.isEmpty != true)
                     Padding(
                       padding: const EdgeInsets.only(top: 12),
                       child: Center(
@@ -572,7 +697,7 @@ class _LoadingCard extends StatelessWidget {
             Text('Reading the link…', style: theme.textTheme.titleMedium),
             const SizedBox(height: 4),
             Text(
-              'yt-dlp is looking up the available formats. This can take a few seconds.',
+              'Looking up the available formats. This can take a few seconds.',
               textAlign: TextAlign.center,
               style: theme.textTheme.bodyMedium?.copyWith(color: theme.colorScheme.onSurfaceVariant),
             ),

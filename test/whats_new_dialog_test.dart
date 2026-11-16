@@ -10,11 +10,11 @@ import '../tool/changelog_markdown.dart';
 /// The What's new popup fits any screen: the list scrolls inside it, and
 /// the header and OK always stay on screen.
 void main() {
-  // The real notes, Unreleased included (the longest list there is).
-  final markdown = File('CHANGELOG.md').readAsStringSync();
-  final releases = ChangelogMarkdown.parse(
-    ChangelogMarkdown.release(markdown, version: '9.9.9', build: 999, date: '2026-11-17'),
-  );
+  // Real notes: the longest release in CHANGELOG.md (what's under Unreleased
+  // changes with every commit, so the test doesn't depend on it).
+  final releases = ChangelogMarkdown.parse(File('CHANGELOG.md').readAsStringSync())
+    ..sort((a, b) => b.sections.expand((s) => s.items).length.compareTo(a.sections.expand((s) => s.items).length));
+  final longest = releases.first;
 
   Future<void> open(WidgetTester tester, Size size) async {
     tester.view.physicalSize = size;
@@ -26,7 +26,7 @@ void main() {
         builder: (context) => Scaffold(
           body: Center(
             child: TextButton(
-              onPressed: () => showWhatsNew(context, releases.first),
+              onPressed: () => showWhatsNew(context, longest),
               child: const Text('open'),
             ),
           ),
@@ -45,9 +45,11 @@ void main() {
   ]) {
     testWidgets('fits a $name screen, scrolls, and OK closes it', (tester) async {
       await open(tester, size);
-      // Only the installed version, never earlier builds.
-      expect(find.text('Version 9.9.9 · Build 999'), findsOneWidget);
-      expect(find.textContaining('v1.1.1'), findsNothing);
+      // One version only, never earlier builds.
+      expect(find.text('Version ${longest.version} · Build ${longest.build}'), findsOneWidget);
+      for (final other in releases.skip(1)) {
+        expect(find.text('Version ${other.version} · Build ${other.build}'), findsNothing);
+      }
       expect(tester.takeException(), isNull);
       expect(find.text('What\'s new'), findsOneWidget);
 

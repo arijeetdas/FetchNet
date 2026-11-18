@@ -147,12 +147,22 @@ bool GuardInAppUpdate() {
   return false;
 }
 
+// Ends FetchNet without running the C runtime's exit code and the DLLs'
+// unload code. Once the other threads are gone, a plugin DLL can spin in
+// that code forever: FetchNet.exe then stays in the background without a
+// window, at full CPU, with its files locked (the installer and in-app
+// updates can't replace them). Everything worth saving is saved by then.
+[[noreturn]] void QuitNow(UINT code) {
+  ::TerminateProcess(::GetCurrentProcess(), code);
+  ::ExitProcess(code);  // not reached
+}
+
 }  // namespace
 
 int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
                       _In_ wchar_t *command_line, _In_ int show_command) {
   // An in-app update that didn't take: back to the previous version.
-  if (GuardInAppUpdate()) return EXIT_SUCCESS;
+  if (GuardInAppUpdate()) QuitNow(EXIT_SUCCESS);
 
   // Attach to console when present (e.g., 'flutter run') or create a
   // new console when running with a debugger.
@@ -175,7 +185,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
   Win32Window::Point origin(10, 10);
   Win32Window::Size size(1280, 720);
   if (!window.Create(L"FetchNet", origin, size)) {
-    return EXIT_FAILURE;
+    QuitNow(EXIT_FAILURE);
   }
   window.SetQuitOnClose(true);
 
@@ -185,6 +195,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
     ::DispatchMessage(&msg);
   }
 
+  // The window and the Flutter engine are shut down by now.
   ::CoUninitialize();
-  return EXIT_SUCCESS;
+  QuitNow(EXIT_SUCCESS);
 }

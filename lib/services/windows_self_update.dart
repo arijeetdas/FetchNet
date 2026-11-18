@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
 
 import '../engine/installer.dart';
+import 'quit_app.dart';
 import 'update_service.dart';
 
 /// How a Windows update is installed.
@@ -179,7 +180,7 @@ class WindowsSelfUpdate {
   /// Starts the new version and closes this one.
   static Future<void> relaunch() async {
     await Process.start(Platform.resolvedExecutable, const [], mode: ProcessStartMode.detached);
-    exit(0);
+    quitApp();
   }
 
   /// Runs the downloaded installer (it asks for permission when FetchNet is
@@ -199,7 +200,7 @@ class WindowsSelfUpdate {
     );
     // Leave before the installer replaces our files.
     await Future<void>.delayed(const Duration(milliseconds: 600));
-    exit(0);
+    quitApp();
   }
 
   /// Called once FetchNet is up after an update: the new version works, so

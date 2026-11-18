@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../core/app_services.dart';
+import '../../services/quit_app.dart';
 import '../../services/update_service.dart';
 import '../../widgets/app_dialog.dart';
 import '../../widgets/brand.dart';
@@ -126,7 +127,7 @@ class _HomeShellState extends State<HomeShell> {
     if (Platform.isAndroid || Platform.isIOS) {
       SystemNavigator.pop();
     } else {
-      exit(0);
+      quitApp();
     }
   }
 

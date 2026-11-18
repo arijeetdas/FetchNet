@@ -35,9 +35,11 @@ class WindowsSelfUpdate {
 
   static const backupSuffix = '.fnold';
 
-  /// Inno Setup's uninstall entry for FetchNet (AppId in FetchNet.iss).
+  /// Inno Setup's uninstall entry for FetchNet. FetchNet.iss writes the AppId
+  /// as `{{B7E4…}}`: Inno reads `{{` as `{` but keeps `}}`, so the key really
+  /// ends in `}}_is1`.
   static const _uninstallKey =
-      r'Software\Microsoft\Windows\CurrentVersion\Uninstall\{B7E42D91-6F83-4A2C-9D15-E8B3C71A604F}_is1';
+      r'Software\Microsoft\Windows\CurrentVersion\Uninstall\{B7E42D91-6F83-4A2C-9D15-E8B3C71A604F}}_is1';
 
   static String get installDir => p.dirname(Platform.resolvedExecutable);
 

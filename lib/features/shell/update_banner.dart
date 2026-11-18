@@ -4,8 +4,10 @@ import 'package:url_launcher/url_launcher.dart';
 import '../../core/app_services.dart';
 import '../../widgets/app_dialog.dart';
 import '../../widgets/brand.dart';
+import 'updater_dialog.dart';
 
-/// Opens this build's update page on fetchnet.arijeet.in in the system browser.
+/// Opens this build's update page on fetchnet.arijeet.in in the system browser
+/// (the updater's fallback when an update can't be installed in the app).
 Future<void> openUpdatePage(BuildContext context) async {
   final uri = await AppScope.of(context).updates.updateLink();
   final ok = await launchUrl(uri, mode: LaunchMode.externalApplication);
@@ -71,7 +73,7 @@ class UpdateBanner extends StatelessWidget {
                 ),
                 const SizedBox(width: 8),
                 FilledButton(
-                  onPressed: () => openUpdatePage(context),
+                  onPressed: () => showUpdaterDialog(context),
                   style: FilledButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10)),
                   child: const Text('Update'),
                 ),

@@ -6,7 +6,9 @@ import '../../services/update_service.dart';
 import '../../widgets/app_dialog.dart';
 import '../../widgets/brand.dart';
 import '../../widgets/platform_logo.dart';
-import '../shell/update_banner.dart';
+import '../../core/app_services.dart';
+import '../shell/updater_dialog.dart';
+import '../shell/whats_new_dialog.dart';
 
 /// Recommended Android build for this device: the same rule as the update
 /// link (the preferred ABI when FetchNet publishes a build for it,
@@ -32,7 +34,7 @@ String installedAndroidBuildFor(String raw) => switch (raw.trim().toLowerCase())
     };
 
 /// "FetchNet for [platform]" popup: version, Android build type advice,
-/// and Check for Updates (opens the website in the system browser).
+/// and Check for Updates (opens the updater when there is an update).
 Future<void> showFetchNetAboutDialog(BuildContext context, {required String version}) async {
   // The startup query may not have answered in time: without the device's
   // ABIs the popup would show Universal / Universal.
@@ -239,13 +241,7 @@ class _AboutDialog extends StatelessWidget {
                       ),
                     ),
                     const SizedBox(height: 20),
-                    GradientButton(
-                      label: 'Check for Updates',
-                      icon: Icons.system_update_rounded,
-                      expand: true,
-                      // Opens /updates/<platform>/<version>+<build>[-<abi>] in the system browser.
-                      onPressed: () => openUpdatePage(context),
-                    ),
+                    const _CheckForUpdatesButton(),
                     const SizedBox(height: 10),
                     DialogButton(
                       label: 'Close',
@@ -337,6 +333,76 @@ class _BuildRow extends StatelessWidget {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// "Check for Updates": checks right away (spinner, disabled meanwhile), then
+/// opens the updater, or says FetchNet is up to date.
+class _CheckForUpdatesButton extends StatefulWidget {
+  const _CheckForUpdatesButton();
+
+  @override
+  State<_CheckForUpdatesButton> createState() => _CheckForUpdatesButtonState();
+}
+
+class _CheckForUpdatesButtonState extends State<_CheckForUpdatesButton> {
+  bool _checking = false;
+
+  Future<void> _check() async {
+    final services = AppScope.of(context);
+    final navigator = Navigator.of(context);
+    setState(() => _checking = true);
+    final state = await services.updates.check();
+    if (!mounted) return;
+    setState(() => _checking = false);
+    switch (state) {
+      case UpdateState.available:
+        // The updater takes this popup's place.
+        if (!navigator.mounted) return;
+        navigator.pop();
+        await showUpdaterDialog(navigator.context);
+      case UpdateState.upToDate:
+        showSnack(context, 'You\'re already on the latest version', kind: ToastKind.success);
+      case UpdateState.ahead:
+        showSnack(context, unreleasedBuildMessage);
+      default:
+        showSnack(context, 'Couldn\'t check for updates', kind: ToastKind.error);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    if (!_checking) {
+      return GradientButton(
+        label: 'Check for Updates',
+        icon: Icons.system_update_rounded,
+        expand: true,
+        onPressed: _check,
+      );
+    }
+    // Disabled while checking, with the app's own spinner.
+    return Opacity(
+      opacity: 0.85,
+      child: DecoratedBox(
+        decoration: BoxDecoration(gradient: AppColors.brandGradient, borderRadius: BorderRadius.circular(18)),
+        child: SizedBox(
+          height: 54,
+          width: double.infinity,
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const EnergyLoader(size: 24, onColor: true),
+              const SizedBox(width: 12),
+              Text(
+                'Checking for Updates…',
+                style: theme.textTheme.titleSmall?.copyWith(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 15.5),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }

@@ -7,9 +7,11 @@ import 'package:fetchnet/engine/gallery_engine.dart';
 import 'package:fetchnet/models/changelog.dart';
 import 'package:fetchnet/models/gallery_models.dart';
 import 'package:fetchnet/models/media_info.dart';
+import 'package:fetchnet/services/download_manager.dart';
 import 'package:fetchnet/services/gallery_service.dart';
 import 'package:fetchnet/services/storage_service.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:path/path.dart' as p;
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../tool/changelog_markdown.dart';
@@ -60,6 +62,7 @@ Intro.
 ''';
 
 void main() {
+  _postFiles();
   group('Changelog markdown', () {
     test('reads releases in FetchNet\'s style', () {
       ChangelogRelease? pending;
@@ -108,23 +111,19 @@ void main() {
         isTrue,
         reason: 'CHANGELOG.md needs notes for the version in pubspec.yaml (or under Unreleased)',
       );
-      // The app ships this version's notes only, in assets/whats_new.json:
-      // it must be generated from the current CHANGELOG.md for this build.
+      // What the website will publish for this build (its notes come from
+      // here through changelog.json).
       final expected = Changelog(releases, pending: pending)
           .notesFor(int.parse(version.group(2)!), installedVersion: version.group(1));
       expect(expected, isNotNull, reason: 'the What\'s new popup would have nothing to show for this build');
-      final shipped = ChangelogRelease.fromJson(jsonDecode(File('assets/whats_new.json').readAsStringSync()));
-      expect(
-        jsonEncode(shipped?.toJson()),
-        jsonEncode(expected!.toJson()),
-        reason: 'assets/whats_new.json is out of date: run "dart run tool/changelog.dart sync"',
-      );
+      expect(jsonDecode(jsonEncode(expected!.toJson())), isA<Map>());
     });
 
-    test('only this version\'s notes ship in the app, not CHANGELOG.md', () {
+    test('no changelog ships in the app (the notes come from the website)', () {
       final pubspec = File('pubspec.yaml').readAsStringSync();
-      expect(pubspec, contains('- assets/whats_new.json'));
+      expect(pubspec, isNot(contains('whats_new.json')));
       expect(pubspec, isNot(contains('- CHANGELOG.md')));
+      expect(File('assets/whats_new.json').existsSync(), isFalse);
     });
   });
 
@@ -282,6 +281,30 @@ Example : https://www.youtube.com/watch?v=x
       expect(w.version, '2.0');
       expect(w.url, 'u2');
       expect(w.sha256, 'b');
+    });
+  });
+}
+
+void _postFiles() {
+  group('A post\'s files', () {
+    late Directory dir;
+    setUp(() => dir = Directory.systemTemp.createTempSync('fetchnet-post-test'));
+    tearDown(() => dir.deleteSync(recursive: true));
+
+    test('go straight into the type folder, numbered, with no folder of their own', () {
+      final first = postFilePath(dir: dir.path, baseName: 'Beach day', extension: '.jpg', number: 1);
+      expect(first, p.join(dir.path, 'Beach day 1.jpg'));
+      expect(p.dirname(first), dir.path);
+      // A single file keeps the exact name.
+      expect(postFilePath(dir: dir.path, baseName: 'Beach day', extension: '.jpg'), p.join(dir.path, 'Beach day.jpg'));
+    });
+
+    test('a name in use gets " (2)"', () {
+      File(p.join(dir.path, 'Beach day 1.jpg')).writeAsStringSync('x');
+      expect(
+        postFilePath(dir: dir.path, baseName: 'Beach day', extension: '.jpg', number: 1),
+        p.join(dir.path, 'Beach day 1 (2).jpg'),
+      );
     });
   });
 }

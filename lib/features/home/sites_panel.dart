@@ -5,6 +5,7 @@ import '../../services/sites_service.dart';
 import '../../widgets/app_dialog.dart';
 import '../../widgets/brand.dart';
 import '../../widgets/site_icon.dart';
+import 'home_kit.dart';
 
 /// Shortcuts to popular sites on Home, plus "Add site" and a plain browser.
 class SitesPanel extends StatelessWidget {
@@ -13,7 +14,6 @@ class SitesPanel extends StatelessWidget {
   final ValueChanged<Site> onOpen;
   final VoidCallback onBrowser;
 
-  static const _columns = 3;
   static const _gap = 10.0;
 
   @override
@@ -26,47 +26,28 @@ class SitesPanel extends StatelessWidget {
       builder: (context, _) {
         final sites = services.sites.all;
         final hasCustom = services.sites.custom.isNotEmpty;
-        return Container(
-          padding: const EdgeInsets.fromLTRB(14, 12, 14, 14),
-          decoration: BoxDecoration(
-            color: scheme.surfaceContainerLow.withValues(alpha: 0.9),
-            borderRadius: BorderRadius.circular(28),
-            border: Border.all(color: scheme.outlineVariant.withValues(alpha: 0.35)),
-            boxShadow: [
-              BoxShadow(color: scheme.primary.withValues(alpha: 0.05), blurRadius: 30, offset: const Offset(0, 12)),
-            ],
-          ),
+        return HomePanel(
+          padding: const EdgeInsets.fromLTRB(14, 14, 14, 14),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Row(
-                children: [
-                  Icon(Icons.public_rounded, color: scheme.primary),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text('Sites', style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800)),
-                        Text(
-                          'Open a site, sign in if needed, and grab media from any page.',
-                          style: theme.textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
-                        ),
-                      ],
-                    ),
-                  ),
-                  if (hasCustom)
-                    IconButton(
-                      tooltip: 'Edit sites',
-                      onPressed: () => _showManageSheet(context),
-                      icon: const Icon(Icons.tune_rounded),
-                    ),
-                ],
+              HomeSectionTitle(
+                icon: Icons.public_rounded,
+                title: 'Popular sites',
+                subtitle: 'Open a site, sign in if needed, and save media from any page.',
+                trailing: hasCustom
+                    ? IconButton(
+                        tooltip: 'Edit sites',
+                        onPressed: () => _showManageSheet(context),
+                        icon: const Icon(Icons.tune_rounded),
+                      )
+                    : null,
               ),
-              const SizedBox(height: 12),
+              const SizedBox(height: 14),
               LayoutBuilder(
                 builder: (context, c) {
-                  final width = (c.maxWidth - _gap * (_columns - 1)) / _columns;
+                  final columns = c.maxWidth >= 600 ? 6 : c.maxWidth >= 400 ? 4 : 3;
+                  final width = (c.maxWidth - _gap * (columns - 1)) / columns;
                   final tiles = <Widget>[
                     for (final site in sites)
                       _Tile(
@@ -83,32 +64,25 @@ class SitesPanel extends StatelessWidget {
                         decoration: BoxDecoration(
                           color: scheme.primaryContainer,
                           borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: scheme.primary.withValues(alpha: 0.35)),
                         ),
                         child: Icon(Icons.add_rounded, color: scheme.onPrimaryContainer),
                       ),
                       onTap: () => _addSite(context),
                     ),
-                    _Tile(
-                      label: 'Browser',
-                      icon: Container(
-                        width: 40,
-                        height: 40,
-                        decoration: BoxDecoration(
-                          gradient: AppColors.brandGradient,
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        child: const Icon(Icons.travel_explore_rounded, color: Colors.white, size: 22),
-                      ),
-                      onTap: onBrowser,
-                    ),
                   ];
                   return Wrap(
                     spacing: _gap,
                     runSpacing: _gap,
-                    children: [for (final t in tiles) SizedBox(width: width, child: t)],
+                    children: [
+                      for (final (i, t) in tiles.indexed)
+                        SizedBox(width: width, child: EntranceMotion(index: i, step: const Duration(milliseconds: 40), child: t)),
+                    ],
                   );
                 },
               ),
+              const SizedBox(height: 12),
+              _BrowserCard(onTap: onBrowser),
             ],
           ),
         );
@@ -300,31 +274,103 @@ class _Tile extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
-    return Material(
-      color: scheme.surfaceContainerLowest.withValues(alpha: 0.65),
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(20),
-        side: BorderSide(color: scheme.outlineVariant.withValues(alpha: 0.3)),
+    return PressableScale(
+      scale: 0.94,
+      child: Material(
+        color: scheme.surfaceContainerLowest.withValues(alpha: 0.7),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(20),
+          side: BorderSide(color: scheme.outlineVariant.withValues(alpha: 0.3)),
+        ),
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          onTap: onTap,
+          onLongPress: onLongPress,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(8, 14, 8, 12),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                DecoratedBox(
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    boxShadow: [BoxShadow(color: scheme.primary.withValues(alpha: 0.12), blurRadius: 16, offset: const Offset(0, 6))],
+                  ),
+                  child: icon,
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  textAlign: TextAlign.center,
+                  style: theme.textTheme.labelLarge?.copyWith(fontWeight: FontWeight.w700),
+                ),
+              ],
+            ),
+          ),
+        ),
       ),
-      clipBehavior: Clip.antiAlias,
-      child: InkWell(
-        onTap: onTap,
-        onLongPress: onLongPress,
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(8, 14, 8, 12),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              icon,
-              const SizedBox(height: 8),
-              Text(
-                label,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                textAlign: TextAlign.center,
-                style: theme.textTheme.labelLarge?.copyWith(fontWeight: FontWeight.w700),
-              ),
-            ],
+    );
+  }
+}
+
+/// The plain built-in browser, as a wide card under the sites.
+class _BrowserCard extends StatelessWidget {
+  const _BrowserCard({required this.onTap});
+
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    return PressableScale(
+      scale: 0.98,
+      child: Material(
+        color: scheme.primaryContainer.withValues(alpha: 0.45),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(20),
+          side: BorderSide(color: scheme.primary.withValues(alpha: 0.3)),
+        ),
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          onTap: onTap,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(12, 12, 10, 12),
+            child: Row(
+              children: [
+                Container(
+                  width: 44,
+                  height: 44,
+                  decoration: BoxDecoration(
+                    gradient: AppColors.brandGradient,
+                    borderRadius: BorderRadius.circular(14),
+                    boxShadow: [
+                      BoxShadow(color: AppColors.violetBright.withValues(alpha: 0.3), blurRadius: 14, offset: const Offset(0, 6)),
+                    ],
+                  ),
+                  child: const Icon(Icons.travel_explore_rounded, color: Colors.white, size: 23),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Browser Mode',
+                        style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w800, color: scheme.onPrimaryContainer),
+                      ),
+                      Text(
+                        'Open any page, play the media, and FetchNet finds the videos, audio and images on it.',
+                        style: theme.textTheme.bodySmall?.copyWith(color: scheme.onPrimaryContainer.withValues(alpha: 0.85), height: 1.35),
+                      ),
+                    ],
+                  ),
+                ),
+                Icon(Icons.arrow_forward_rounded, color: scheme.onPrimaryContainer),
+              ],
+            ),
           ),
         ),
       ),

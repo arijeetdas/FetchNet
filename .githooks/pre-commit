@@ -5,11 +5,10 @@
 #
 # - The commit changes the `version:` line of pubspec.yaml: the notes under
 #   "## Unreleased" in CHANGELOG.md are filed under the new version (commit
-#   subjects since the last bump when there are none). Then the app's
-#   assets/whats_new.json (this version's notes only, for the one-time
-#   "What's new" popup) and the website's src/config/changelog.json are
-#   regenerated.
-# - The commit touches CHANGELOG.md: both are regenerated.
+#   subjects since the last bump when there are none). Then the website's
+#   src/config/changelog.json is regenerated (the app reads its What's new
+#   notes from the website; it ships no changelog).
+# - The commit touches CHANGELOG.md: the website's JSON is regenerated.
 # Anything else commits untouched.
 
 staged=$(git diff --cached --name-only)
@@ -25,7 +24,7 @@ if [ -n "$new" ] && [ "$old" != "$new" ]; then
   echo "changelog: version $old -> $new"
   dart run tool/changelog.dart release --version "$new" || exit 1
 else
-  dart run tool/changelog.dart sync --version "$new" || exit 1
+  dart run tool/changelog.dart sync || exit 1
 fi
 
-git add CHANGELOG.md assets/whats_new.json
+git add CHANGELOG.md

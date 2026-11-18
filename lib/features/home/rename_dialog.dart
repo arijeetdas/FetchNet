@@ -39,8 +39,17 @@ class _RenameDialogState extends State<_RenameDialog> {
   bool get _audio => widget.option.kind == MediaKind.audio;
   bool get _thumbnail => widget.option.kind == MediaKind.thumbnail;
 
-  /// Several files of a post: the name is a folder's.
-  bool get _folder => widget.option.kind == MediaKind.post;
+  /// Several files of a post: they're numbered (`name 1`, `name 2`, ...)
+  /// straight into the Images, Audio and Video folders.
+  bool get _numbered => widget.option.kind == MediaKind.post;
+
+  /// Whether [name] is in use: for a post, its first numbered file.
+  bool _taken(String name, Set<String> reserved) {
+    final storage = AppScope.of(context).storage;
+    final kind = widget.option.kind;
+    if (reserved.contains(name.toLowerCase())) return true;
+    return _numbered ? storage.baseNameTaken('$name 1', kind: kind) : storage.baseNameTaken(name, kind: kind);
+  }
 
   String? get _label => switch (widget.option.kind) {
         MediaKind.image => 'Image',
@@ -78,12 +87,16 @@ class _RenameDialogState extends State<_RenameDialog> {
     if (name.isEmpty) name = _random();
     final reserved = services.downloads.reservedNames;
     final kind = widget.option.kind;
-    if (services.storage.baseNameTaken(name, kind: kind, folders: _folder) || reserved.contains(name.toLowerCase())) {
+    if (_taken(name, reserved)) {
+      var suggestion = '$name (2)';
+      for (var i = 3; _taken(suggestion, reserved) && i < 1000; i++) {
+        suggestion = '$name ($i)';
+      }
       setState(() {
-        _error = _folder
-            ? 'A folder or file with this name already exists in FetchNet\'s Images, Audio or Video folder.'
+        _error = _numbered
+            ? 'Files with this name already exist in FetchNet\'s Images, Audio or Video folder.'
             : 'A file with this name already exists in the FetchNet/${MediaFolder.forKind(kind).folderName} folder.';
-        _suggestion = services.storage.uniqueBaseName(name, alsoTaken: reserved, kind: kind, folders: _folder);
+        _suggestion = suggestion;
       });
       return;
     }
@@ -109,7 +122,7 @@ class _RenameDialogState extends State<_RenameDialog> {
               switch (widget.option.kind) {
                 MediaKind.audio => Icons.music_note_rounded,
                 MediaKind.image || MediaKind.thumbnail => Icons.photo_rounded,
-                MediaKind.post => Icons.folder_rounded,
+                MediaKind.post => Icons.collections_rounded,
                 MediaKind.video => Icons.movie_rounded,
               },
               color: Colors.white,
@@ -117,7 +130,7 @@ class _RenameDialogState extends State<_RenameDialog> {
             ),
           ),
           const SizedBox(width: 12),
-          Expanded(child: Text(_folder ? 'Name the folder' : 'Name your file')),
+          Expanded(child: Text(_numbered ? 'Name the files' : 'Name your file')),
         ],
       ),
       content: ConstrainedBox(
@@ -127,9 +140,9 @@ class _RenameDialogState extends State<_RenameDialog> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             Text(
-              _folder
+              _numbered
                   ? 'Saved to Download/FetchNet as ${widget.option.label}${widget.option.detail != null ? ' (${widget.option.detail})' : ''}, '
-                      'sorted into its Images, Audio and Video folders.'
+                      'numbered (name 1, name 2, …) straight into its Images, Audio and Video folders.'
                   : 'Saved to Download/FetchNet/${MediaFolder.forKind(widget.option.kind).folderName} as '
                       '${widget.option.label}${widget.option.detail != null ? ' (${widget.option.detail})' : ''}.',
               style: theme.textTheme.bodyMedium?.copyWith(color: scheme.onSurfaceVariant),
@@ -142,11 +155,15 @@ class _RenameDialogState extends State<_RenameDialog> {
               textInputAction: TextInputAction.done,
               onSubmitted: (_) => _submit(),
               decoration: InputDecoration(
-                labelText: _folder ? 'Folder name' : 'File name',
+                labelText: _numbered ? 'File names' : 'File name',
                 hintText: 'Leave empty for a random name',
                 errorText: _error,
                 errorMaxLines: 2,
-                suffixText: widget.option.extension.isEmpty ? null : '.${widget.option.extension}',
+                suffixText: _numbered
+                    ? ' 1, 2, …'
+                    : widget.option.extension.isEmpty
+                    ? null
+                    : '.${widget.option.extension}',
                 suffixIcon: IconButton(
                   tooltip: 'Random name',
                   icon: const Icon(Icons.casino_rounded),

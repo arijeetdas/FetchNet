@@ -7,10 +7,14 @@ import '../../models/gallery_models.dart';
 import '../../models/media_info.dart';
 import '../../widgets/app_dialog.dart';
 import '../../widgets/brand.dart';
+import '../../widgets/motion/motion_core.dart';
+import 'home_kit.dart';
+import 'media_preview.dart';
 import 'rename_dialog.dart';
 
-/// Every file of a post (gallery-dl): filter by type, pick files, download
-/// them together. A profile / board link lists its posts instead.
+/// Every file of a post (gallery-dl): filter by type, pick files, preview
+/// them full screen, download them together. A profile / board link lists
+/// its posts instead.
 class PostResultView extends StatefulWidget {
   const PostResultView({super.key, required this.post, required this.onOpenChild, this.framed = true, this.onQueued});
 
@@ -32,8 +36,11 @@ class _PostResultViewState extends State<PostResultView> {
   /// Tiles built at first; big galleries show more on request.
   int _shown = 60;
 
-  List<GalleryItem> get _visible =>
-      widget.post.items.where((i) => _filter == null || i.kind == _filter).toList();
+  List<GalleryItem> get _visible => widget.post.items.where((i) => _filter == null || i.kind == _filter).toList();
+
+  void _toggle(GalleryItem item) => setState(() {
+        if (!_selected.remove(item.index)) _selected.add(item.index);
+      });
 
   Future<void> _download() async {
     final services = AppScope.of(context);
@@ -74,7 +81,7 @@ class _PostResultViewState extends State<PostResultView> {
     final navigator = Navigator.of(context, rootNavigator: true);
     showSnack(
       context,
-      single == null ? 'Downloading ${items.length} files into "$name"' : 'Downloading $name.${single.extension}',
+      single == null ? 'Downloading ${items.length} files as "$name 1" to "$name ${items.length}"' : 'Downloading $name.${single.extension}',
       kind: ToastKind.success,
       actionLabel: 'View',
       onAction: () {
@@ -85,12 +92,35 @@ class _PostResultViewState extends State<PostResultView> {
     widget.onQueued?.call();
   }
 
+  /// Opens the full-screen viewer on [item], swiping through [visible].
+  void _preview(List<GalleryItem> visible, GalleryItem item) {
+    showMediaPreview(
+      context,
+      initial: visible.indexOf(item),
+      headers: {'Referer': widget.post.url},
+      items: [
+        for (final i in visible)
+          PreviewItem(
+            url: _fullPicture(i) ?? '',
+            caption: [
+              '${_kindLabel(i.kind)} ${i.index}',
+              if (i.width != null && i.height != null) '${i.width}×${i.height}',
+              if (i.sizeBytes != null) formatBytes(i.sizeBytes),
+            ].join(' · '),
+            icon: _kindIcon(i.kind),
+          ),
+      ],
+      isSelected: (n) => _selected.contains(visible[n].index),
+      onToggle: (n) => _toggle(visible[n]),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final post = widget.post;
     final body = post.items.isEmpty ? _ChildrenList(post: post, onOpen: widget.onOpenChild) : _buildFiles(context);
     if (!widget.framed) return body;
-    return Card(clipBehavior: Clip.antiAlias, child: Padding(padding: const EdgeInsets.all(16), child: body));
+    return HomePanel(highlight: true, padding: const EdgeInsets.all(16), child: body);
   }
 
   Widget _buildFiles(BuildContext context) {
@@ -101,88 +131,139 @@ class _PostResultViewState extends State<PostResultView> {
     final visible = _visible;
     final allVisibleSelected = visible.isNotEmpty && visible.every((i) => _selected.contains(i.index));
     final kinds = [for (final k in GalleryItemKind.values) if (post.count(k) > 0) k];
+    final picked = post.items.where((i) => _selected.contains(i.index)).toList();
+    final sizes = picked.map((i) => i.sizeBytes).whereType<int>().toList();
+    final total = sizes.isEmpty ? null : sizes.reduce((a, b) => a + b);
+    final sizeKnown = sizes.length == picked.length;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        _PostHeader(post: post),
-        const SizedBox(height: 14),
-        if (kinds.length > 1 || post.truncated)
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: [
-              if (kinds.length > 1)
-                ChoiceChip(
-                  label: Text('All ${post.items.length}${post.truncated ? '+' : ''}'),
-                  selected: _filter == null,
-                  onSelected: (_) => setState(() => _filter = null),
-                ),
-              if (kinds.length > 1)
+        EntranceMotion(child: _PostHeader(post: post)),
+        const SizedBox(height: 16),
+        if (kinds.length > 1)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 12),
+            child: SlidingSegments<GalleryItemKind?>(
+              segments: [
+                Segment(value: null, label: 'All', count: post.items.length),
                 for (final k in kinds)
-                  ChoiceChip(
-                    avatar: Icon(_kindIcon(k), size: 18),
-                    label: Text('${_kindLabel(k, plural: post.count(k) != 1)} ${post.count(k)}'),
-                    selected: _filter == k,
-                    onSelected: (_) => setState(() => _filter = _filter == k ? null : k),
+                  Segment(value: k, icon: _kindIcon(k), label: _kindLabel(k, plural: post.count(k) != 1), count: post.count(k)),
+              ],
+              selected: _filter,
+              onChanged: (k) => setState(() => _filter = k),
+            ),
+          ),
+        if (post.truncated)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 10),
+            child: Row(
+              children: [
+                Icon(Icons.info_outline_rounded, size: 16, color: scheme.onSurfaceVariant),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    'A big post: showing its first ${post.items.length} files.',
+                    style: theme.textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
                   ),
-              if (post.truncated)
-                Chip(
-                  avatar: Icon(Icons.info_outline_rounded, size: 18, color: scheme.onSurfaceVariant),
-                  label: Text('Showing the first ${post.items.length} files'),
                 ),
+              ],
+            ),
+          ),
+        // Selection bar.
+        Container(
+          padding: const EdgeInsets.fromLTRB(14, 6, 6, 6),
+          decoration: BoxDecoration(
+            color: scheme.primaryContainer.withValues(alpha: 0.35),
+            borderRadius: BorderRadius.circular(16),
+          ),
+          child: Row(
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    AnimatedSwitcher(
+                      duration: homeDuration(context, const Duration(milliseconds: 180)),
+                      layoutBuilder: (current, previous) =>
+                          Stack(alignment: Alignment.centerLeft, children: [...previous, ?current]),
+                      child: Text(
+                        '${_selected.length} of ${post.items.length} selected',
+                        key: ValueKey(_selected.length),
+                        style: theme.textTheme.labelLarge?.copyWith(fontWeight: FontWeight.w800),
+                      ),
+                    ),
+                    Text(
+                      total == null ? 'Tap to pick · hold to preview' : '${sizeKnown ? '' : 'at least '}${formatBytes(total)} · hold to preview',
+                      style: theme.textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
+                    ),
+                  ],
+                ),
+              ),
+              IconButton(
+                tooltip: 'Invert selection',
+                onPressed: visible.isEmpty
+                    ? null
+                    : () => setState(() {
+                          for (final i in visible) {
+                            if (!_selected.remove(i.index)) _selected.add(i.index);
+                          }
+                        }),
+                icon: const Icon(Icons.flip_rounded),
+              ),
+              TextButton.icon(
+                onPressed: visible.isEmpty
+                    ? null
+                    : () => setState(() {
+                          if (allVisibleSelected) {
+                            _selected.removeAll(visible.map((i) => i.index));
+                          } else {
+                            _selected.addAll(visible.map((i) => i.index));
+                          }
+                        }),
+                icon: Icon(allVisibleSelected ? Icons.deselect_rounded : Icons.select_all_rounded),
+                label: Text(allVisibleSelected ? 'None' : 'All'),
+              ),
             ],
           ),
-        const SizedBox(height: 10),
-        Row(
-          children: [
-            Expanded(
-              child: Text(
-                '${_selected.length} of ${post.items.length} selected',
-                style: theme.textTheme.labelLarge?.copyWith(color: scheme.onSurfaceVariant),
-              ),
-            ),
-            TextButton.icon(
-              onPressed: visible.isEmpty
-                  ? null
-                  : () => setState(() {
-                        if (allVisibleSelected) {
-                          _selected.removeAll(visible.map((i) => i.index));
-                        } else {
-                          _selected.addAll(visible.map((i) => i.index));
-                        }
-                      }),
-              icon: Icon(allVisibleSelected ? Icons.deselect_rounded : Icons.select_all_rounded),
-              label: Text(allVisibleSelected ? 'Select none' : 'Select all'),
-            ),
-          ],
         ),
-        const SizedBox(height: 6),
-        LayoutBuilder(builder: (context, c) {
-          final columns = (c.maxWidth / 150).floor().clamp(2, 6);
-          final shown = visible.take(_shown).toList();
-          return GridView.builder(
-            shrinkWrap: true,
-            physics: const NeverScrollableScrollPhysics(),
-            itemCount: shown.length,
-            gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-              crossAxisCount: columns,
-              mainAxisSpacing: 8,
-              crossAxisSpacing: 8,
-            ),
-            itemBuilder: (context, i) {
-              final item = shown[i];
-              return _FileTile(
-                item: item,
-                referer: post.url,
-                selected: _selected.contains(item.index),
-                onTap: () => setState(() {
-                  if (!_selected.remove(item.index)) _selected.add(item.index);
-                }),
+        const SizedBox(height: 10),
+        AnimatedSwitcher(
+          duration: homeDuration(context, const Duration(milliseconds: 260)),
+          layoutBuilder: (current, previous) => Stack(alignment: Alignment.topCenter, children: [...previous, ?current]),
+          child: LayoutBuilder(
+            key: ValueKey(_filter),
+            builder: (context, c) {
+              final columns = (c.maxWidth / 140).floor().clamp(2, 6);
+              final shown = visible.take(_shown).toList();
+              return GridView.builder(
+                shrinkWrap: true,
+                physics: const NeverScrollableScrollPhysics(),
+                itemCount: shown.length,
+                gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                  crossAxisCount: columns,
+                  mainAxisSpacing: 8,
+                  crossAxisSpacing: 8,
+                ),
+                itemBuilder: (context, i) {
+                  final item = shown[i];
+                  return EntranceMotion(
+                    index: i,
+                    step: const Duration(milliseconds: 30),
+                    offset: 10,
+                    child: _FileTile(
+                      item: item,
+                      referer: post.url,
+                      selected: _selected.contains(item.index),
+                      onTap: () => _toggle(item),
+                      onPreview: () => _preview(visible, item),
+                    ),
+                  );
+                },
               );
             },
-          );
-        }),
+          ),
+        ),
         if (visible.length > _shown)
           Padding(
             padding: const EdgeInsets.only(top: 8),
@@ -205,11 +286,14 @@ class _PostResultViewState extends State<PostResultView> {
                 GradientButton(
                   label: _selected.isEmpty
                       ? 'Pick files to download'
-                      : _selected.length == 1
-                          ? 'Download 1 file'
-                          : 'Download ${_selected.length} files',
+                      : [
+                          _selected.length == 1 ? 'Download 1 file' : 'Download ${_selected.length} files',
+                          if (total != null && sizeKnown) '~${formatBytes(total)}',
+                        ].join('  ·  '),
                   icon: Icons.download_rounded,
                   expand: true,
+                  height: 56,
+                  loading: !ready && status.state != EngineState.error,
                   onPressed: _selected.isEmpty || !ready ? null : _download,
                 ),
                 if (!ready && status.message != null) ...[
@@ -223,6 +307,13 @@ class _PostResultViewState extends State<PostResultView> {
       ],
     );
   }
+}
+
+/// The best picture of [item] for the full-screen viewer: the image itself,
+/// or a video's poster.
+String? _fullPicture(GalleryItem item) {
+  if (item.kind == GalleryItemKind.image && !item.viaYtDlp && item.url.startsWith('http')) return item.url;
+  return item.preview;
 }
 
 String _kindLabel(GalleryItemKind kind, {bool plural = false}) => switch (kind) {
@@ -258,44 +349,40 @@ class _PostHeader extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
-    final meta = [?post.author, if (post.items.isNotEmpty) _summary(post.items)].join(' · ');
+    final covers = [for (final i in post.items) ?i.preview].take(3).toList();
+    final chips = <Widget>[
+      if (post.site != null) MetaChip(icon: Icons.public_rounded, text: post.site!, strong: true),
+      if (post.author != null) MetaChip(icon: Icons.person_rounded, text: post.author!),
+      for (final k in GalleryItemKind.values)
+        if (post.count(k) > 0) MetaChip(icon: _kindIcon(k), text: '${post.count(k)}${post.truncated ? '+' : ''} ${_kindLabel(k, plural: post.count(k) != 1).toLowerCase()}'),
+    ];
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Container(
-          width: 46,
-          height: 46,
-          decoration: BoxDecoration(gradient: AppColors.brandGradient, borderRadius: BorderRadius.circular(15)),
-          child: const Icon(Icons.photo_library_rounded, color: Colors.white),
-        ),
-        const SizedBox(width: 12),
+        _CoverStack(covers: covers, referer: post.url, isPost: post.items.isNotEmpty),
+        const SizedBox(width: 14),
         Expanded(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(post.title, style: theme.textTheme.titleLarge, maxLines: 3, overflow: TextOverflow.ellipsis),
-              if (meta.isNotEmpty) ...[
+              Text(
+                post.title,
+                style: theme.textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w800, height: 1.25),
+                maxLines: 3,
+                overflow: TextOverflow.ellipsis,
+              ),
+              if (post.description != null && post.description!.trim().isNotEmpty && post.description!.trim() != post.title.trim()) ...[
                 const SizedBox(height: 4),
-                Text(meta, style: theme.textTheme.bodyMedium?.copyWith(color: scheme.onSurfaceVariant)),
-              ],
-              if (post.site != null) ...[
-                const SizedBox(height: 8),
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                  decoration: BoxDecoration(color: scheme.secondaryContainer, borderRadius: BorderRadius.circular(999)),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(Icons.public_rounded, size: 14, color: scheme.onSecondaryContainer),
-                      const SizedBox(width: 6),
-                      Text(
-                        post.site!,
-                        style: theme.textTheme.labelMedium
-                            ?.copyWith(color: scheme.onSecondaryContainer, fontWeight: FontWeight.w700),
-                      ),
-                    ],
-                  ),
+                Text(
+                  post.description!.trim(),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: theme.textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant, height: 1.35),
                 ),
+              ],
+              if (chips.isNotEmpty) ...[
+                const SizedBox(height: 10),
+                Wrap(spacing: 6, runSpacing: 6, children: chips),
               ],
             ],
           ),
@@ -305,118 +392,196 @@ class _PostHeader extends StatelessWidget {
   }
 }
 
+/// Up to three of the post's pictures, fanned like a little stack of prints.
+class _CoverStack extends StatelessWidget {
+  const _CoverStack({required this.covers, required this.referer, required this.isPost});
+
+  final List<String> covers;
+  final String referer;
+  final bool isPost;
+
+  @override
+  Widget build(BuildContext context) {
+    const size = 72.0;
+    final scheme = Theme.of(context).colorScheme;
+    Widget tile(Widget child) => Container(
+          width: size,
+          height: size,
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(color: scheme.surfaceContainerLowest, width: 2.5),
+            boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.18), blurRadius: 10, offset: const Offset(0, 4))],
+          ),
+          child: ClipRRect(borderRadius: BorderRadius.circular(15.5), child: child),
+        );
+    final fallback = DecoratedBox(
+      decoration: const BoxDecoration(gradient: tileGradient),
+      child: Icon(isPost ? Icons.photo_library_rounded : Icons.collections_bookmark_rounded, color: Colors.white),
+    );
+    if (covers.isEmpty) return tile(fallback);
+    // (angle, dx) per print: the first lies straight on top of the others.
+    const fan = [(0.0, 0.0), (0.13, 7.0), (-0.13, -7.0)];
+    final n = covers.length;
+    return SizedBox(
+      width: size + 14,
+      height: size + 10,
+      child: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          for (var i = n - 1; i >= 0; i--)
+            Positioned(
+              left: 7 + fan[i].$2,
+              top: 5,
+              child: Transform.rotate(
+                angle: fan[i].$1,
+                child: tile(
+                  FadeInNetworkImage(url: covers[i], headers: {'Referer': referer}, cacheWidth: 200, fallback: fallback),
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
 class _FileTile extends StatelessWidget {
-  const _FileTile({required this.item, required this.referer, required this.selected, required this.onTap});
+  const _FileTile({
+    required this.item,
+    required this.referer,
+    required this.selected,
+    required this.onTap,
+    required this.onPreview,
+  });
 
   final GalleryItem item;
   final String referer;
   final bool selected;
   final VoidCallback onTap;
+  final VoidCallback onPreview;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
     final dims = item.width != null && item.height != null ? '${item.width}×${item.height}' : null;
-    final badge = [
-      switch (item.kind) {
-        GalleryItemKind.image => item.extension == 'gif' ? 'GIF' : 'IMAGE',
-        GalleryItemKind.video => 'VIDEO',
-        GalleryItemKind.audio => 'AUDIO',
-        GalleryItemKind.other => item.extension.toUpperCase(),
-      },
-      if (item.duration != null && item.duration! > 0) formatDuration(item.duration),
-    ].join(' · ');
+    final badge = switch (item.kind) {
+      GalleryItemKind.image => item.extension == 'gif' ? 'GIF' : item.extension.toUpperCase(),
+      GalleryItemKind.video => item.duration != null && item.duration! > 0 ? formatDuration(item.duration) : 'VIDEO',
+      GalleryItemKind.audio => 'AUDIO',
+      GalleryItemKind.other => item.extension.toUpperCase(),
+    };
     final footer = [?dims, if (item.sizeBytes != null) formatBytes(item.sizeBytes)].join(' · ');
     final preview = item.preview;
+    final d = homeDuration(context, const Duration(milliseconds: 240));
+    final fallback = ColoredBox(
+      color: scheme.surfaceContainerHighest,
+      child: Icon(_kindIcon(item.kind), size: 34, color: scheme.onSurfaceVariant),
+    );
+
     return Semantics(
       selected: selected,
       button: true,
-      label: '${_kindLabel(item.kind)} ${item.index}',
-      child: Material(
-        color: scheme.surfaceContainerHighest,
-        borderRadius: BorderRadius.circular(16),
-        clipBehavior: Clip.antiAlias,
-        child: InkWell(
-          onTap: onTap,
-          child: Stack(
-            fit: StackFit.expand,
-            children: [
-              if (preview != null)
-                Image.network(
-                  preview,
-                  headers: {'Referer': referer},
-                  fit: BoxFit.cover,
-                  cacheWidth: 360,
-                  errorBuilder: (_, _, _) => Icon(_kindIcon(item.kind), size: 36, color: scheme.onSurfaceVariant),
-                )
-              else
-                Icon(_kindIcon(item.kind), size: 36, color: scheme.onSurfaceVariant),
-              // Legible labels over any picture.
-              const DecoratedBox(
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.topCenter,
-                    end: Alignment.bottomCenter,
-                    colors: [Color(0x66000000), Color(0x00000000), Color(0x00000000), Color(0x8C000000)],
-                    stops: [0, 0.3, 0.6, 1],
+      label: '${_kindLabel(item.kind)} ${item.index}${footer.isEmpty ? '' : ', $footer'}',
+      onLongPressHint: 'Preview',
+      child: PressableScale(
+        scale: 0.95,
+        child: AnimatedContainer(
+          duration: d,
+          curve: Curves.easeOutCubic,
+          padding: EdgeInsets.all(selected ? 2.5 : 0),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(18),
+            gradient: selected ? AppColors.brandGradient : null,
+          ),
+          child: Material(
+            color: scheme.surfaceContainerHighest,
+            borderRadius: BorderRadius.circular(selected ? 15.5 : 18),
+            clipBehavior: Clip.antiAlias,
+            child: InkWell(
+              onTap: onTap,
+              onLongPress: onPreview,
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  AnimatedScale(
+                    scale: selected ? 1.0 : 1.04,
+                    duration: d,
+                    child: preview != null
+                        ? FadeInNetworkImage(url: preview, headers: {'Referer': referer}, cacheWidth: 360, fallback: fallback)
+                        : fallback,
                   ),
-                ),
-              ),
-              Positioned(
-                left: 8,
-                top: 8,
-                right: 36,
-                child: Row(
-                  children: [
-                    Icon(_kindIcon(item.kind), size: 14, color: Colors.white),
-                    const SizedBox(width: 4),
-                    Flexible(
-                      child: Text(
-                        badge,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: theme.textTheme.labelSmall?.copyWith(color: Colors.white, fontWeight: FontWeight.w800),
+                  // Legible labels over any picture; unselected files dim a little.
+                  AnimatedContainer(
+                    duration: d,
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
+                        colors: [
+                          const Color(0x66000000),
+                          Colors.black.withValues(alpha: selected ? 0 : 0.18),
+                          Colors.black.withValues(alpha: selected ? 0 : 0.18),
+                          const Color(0x99000000),
+                        ],
+                        stops: const [0, 0.32, 0.6, 1],
                       ),
                     ),
-                  ],
-                ),
+                  ),
+                  if (item.kind == GalleryItemKind.video || item.kind == GalleryItemKind.audio)
+                    Center(
+                      child: Container(
+                        width: 38,
+                        height: 38,
+                        decoration: BoxDecoration(
+                          color: Colors.black.withValues(alpha: 0.45),
+                          shape: BoxShape.circle,
+                          border: Border.all(color: Colors.white.withValues(alpha: 0.6), width: 1.4),
+                        ),
+                        child: Icon(
+                          item.kind == GalleryItemKind.video ? Icons.play_arrow_rounded : Icons.graphic_eq_rounded,
+                          color: Colors.white,
+                          size: 22,
+                        ),
+                      ),
+                    ),
+                  Positioned(left: 6, top: 6, right: 34, child: Align(alignment: Alignment.centerLeft, child: OverlayPill(text: badge, icon: _kindIcon(item.kind)))),
+                  Positioned(
+                    right: 6,
+                    top: 6,
+                    child: AnimatedContainer(
+                      duration: d,
+                      width: 24,
+                      height: 24,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        gradient: selected ? AppColors.brandGradient : null,
+                        color: selected ? null : Colors.black26,
+                        border: Border.all(color: Colors.white, width: 2),
+                      ),
+                      child: AnimatedScale(
+                        scale: selected ? 1 : 0,
+                        duration: d,
+                        curve: springCurve,
+                        child: const Icon(Icons.check_rounded, size: 15, color: Colors.white),
+                      ),
+                    ),
+                  ),
+                  if (footer.isNotEmpty)
+                    Positioned(
+                      left: 8,
+                      right: 8,
+                      bottom: 6,
+                      child: Text(
+                        footer,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: theme.textTheme.labelSmall?.copyWith(color: Colors.white, fontWeight: FontWeight.w700),
+                      ),
+                    ),
+                ],
               ),
-              Positioned(
-                right: 6,
-                top: 6,
-                child: AnimatedContainer(
-                  duration: const Duration(milliseconds: 160),
-                  width: 24,
-                  height: 24,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: selected ? scheme.primary : Colors.black26,
-                    border: Border.all(color: Colors.white, width: 2),
-                  ),
-                  child: selected ? Icon(Icons.check_rounded, size: 16, color: scheme.onPrimary) : null,
-                ),
-              ),
-              if (footer.isNotEmpty)
-                Positioned(
-                  left: 8,
-                  right: 8,
-                  bottom: 6,
-                  child: Text(
-                    footer,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: theme.textTheme.labelSmall?.copyWith(color: Colors.white),
-                  ),
-                ),
-              if (selected)
-                DecoratedBox(
-                  decoration: BoxDecoration(
-                    border: Border.all(color: scheme.primary, width: 3),
-                    borderRadius: BorderRadius.circular(16),
-                  ),
-                ),
-            ],
+            ),
           ),
         ),
       ),
@@ -434,26 +599,74 @@ class _ChildrenList extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
+    final children = post.children.take(200).toList();
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         _PostHeader(post: post),
-        const SizedBox(height: 12),
+        const SizedBox(height: 14),
         Text(
-          '${post.children.length}${post.children.length >= 200 ? '+' : ''} posts. Open one to pick its files.',
+          '${post.children.length}${post.children.length >= 200 ? '+' : ''} posts · open one to pick its files',
           style: theme.textTheme.labelLarge?.copyWith(color: scheme.onSurfaceVariant),
         ),
-        const SizedBox(height: 6),
-        for (final child in post.children.take(200))
-          ListTile(
-            contentPadding: const EdgeInsets.symmetric(horizontal: 4),
-            leading: const Icon(Icons.photo_library_outlined),
-            title: Text(child.title, maxLines: 2, overflow: TextOverflow.ellipsis),
-            subtitle: child.title == child.url
-                ? null
-                : Text(child.url, maxLines: 1, overflow: TextOverflow.ellipsis),
-            trailing: const Icon(Icons.chevron_right_rounded),
-            onTap: () => onOpen(child.url),
+        const SizedBox(height: 8),
+        for (final (i, child) in children.indexed)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 8),
+            child: EntranceMotion(
+              index: i,
+              step: const Duration(milliseconds: 30),
+              offset: 10,
+              child: PressableScale(
+                scale: 0.98,
+                child: Material(
+                  color: scheme.surfaceContainerLowest.withValues(alpha: 0.75),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(18),
+                    side: BorderSide(color: scheme.outlineVariant.withValues(alpha: 0.35)),
+                  ),
+                  clipBehavior: Clip.antiAlias,
+                  child: InkWell(
+                    onTap: () => onOpen(child.url),
+                    child: Padding(
+                      padding: const EdgeInsets.fromLTRB(10, 10, 6, 10),
+                      child: Row(
+                        children: [
+                          Container(
+                            width: 38,
+                            height: 38,
+                            decoration: BoxDecoration(color: scheme.primaryContainer, borderRadius: BorderRadius.circular(12)),
+                            child: Icon(Icons.photo_library_outlined, color: scheme.onPrimaryContainer, size: 20),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  child.title,
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
+                                ),
+                                if (child.title != child.url)
+                                  Text(
+                                    child.url,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: theme.textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
+                                  ),
+                              ],
+                            ),
+                          ),
+                          Icon(Icons.chevron_right_rounded, color: scheme.onSurfaceVariant),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
           ),
       ],
     );
@@ -483,22 +696,27 @@ class _PostOrMediaSwitchState extends State<PostOrMediaSwitch> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Center(
-          child: SegmentedButton<bool>(
-            segments: [
-              ButtonSegment(
-                value: true,
-                icon: const Icon(Icons.photo_library_rounded),
-                label: Text(n == 0 ? 'Post' : 'Post · $n ${n == 1 ? 'file' : 'files'}'),
-              ),
-              const ButtonSegment(value: false, icon: Icon(Icons.movie_rounded), label: Text('Video')),
-            ],
-            selected: {_post},
-            onSelectionChanged: (s) => setState(() => _post = s.first),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 440),
+            child: SlidingSegments<bool>(
+              segments: [
+                Segment(value: true, icon: Icons.photo_library_rounded, label: n == 1 ? 'Post · 1 file' : 'Post', count: n > 1 ? n : null),
+                const Segment(value: false, icon: Icons.movie_rounded, label: 'Video'),
+              ],
+              selected: _post,
+              onChanged: (v) => setState(() => _post = v),
+            ),
           ),
         ),
         const SizedBox(height: 12),
         AnimatedSwitcher(
-          duration: const Duration(milliseconds: 250),
+          duration: homeDuration(context, const Duration(milliseconds: 280)),
+          switchInCurve: Curves.easeOutCubic,
+          transitionBuilder: (child, a) => FadeTransition(
+            opacity: a,
+            child: SlideTransition(position: Tween(begin: const Offset(0, 0.02), end: Offset.zero).animate(a), child: child),
+          ),
+          layoutBuilder: (current, previous) => Stack(alignment: Alignment.topCenter, children: [...previous, ?current]),
           child: KeyedSubtree(key: ValueKey(_post), child: _post ? widget.postView : widget.mediaView),
         ),
       ],

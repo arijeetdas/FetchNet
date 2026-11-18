@@ -1,7 +1,4 @@
-import 'dart:convert';
-
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 
 import '../../core/app_services.dart';
 import '../../core/platform/device_environment.dart';
@@ -10,21 +7,7 @@ import '../../services/update_service.dart';
 import '../../widgets/app_dialog.dart';
 import '../../widgets/brand.dart';
 import '../../widgets/platform_logo.dart';
-
-/// This version's notes: `assets/whats_new.json`, generated from
-/// CHANGELOG.md for the version in pubspec.yaml by `tool/changelog.dart`
-/// (the full changelog doesn't ship in the app). `null` when the file holds
-/// no notes, or notes of another build (a build made before regenerating it).
-Future<ChangelogRelease?> loadWhatsNew(int installedBuild, {AssetBundle? bundle}) async {
-  try {
-    final text = await (bundle ?? rootBundle).loadString('assets/whats_new.json');
-    final notes = ChangelogRelease.fromJson(jsonDecode(text));
-    if (notes == null || notes.build != installedBuild || notes.isEmpty) return null;
-    return notes;
-  } catch (_) {
-    return null;
-  }
-}
+import 'updater_dialog.dart';
 
 /// The one-time "What's new" popup, for the installed version only.
 ///
@@ -34,9 +17,10 @@ Future<ChangelogRelease?> loadWhatsNew(int installedBuild, {AssetBundle? bundle}
 /// - a newer build's flag exists (an older version was installed): create
 ///   this build's flag without showing anything.
 ///
-/// The flag is created before the popup opens, so it never shows twice even
-/// if the app closes meanwhile. A build without notes creates no flag, so a
-/// later build of the same version with notes still shows them.
+/// The notes come from the website (the app ships no changelog). The flag
+/// is created before the popup opens, so it never shows twice even if the
+/// app closes meanwhile. Notes that can't be loaded (offline) create no
+/// flag: the popup tries again on the next launch.
 Future<void> maybeShowWhatsNew(BuildContext context, AppServices services) async {
   final installed = await services.updates.installedRelease();
   if (installed == null || !context.mounted) return;
@@ -48,24 +32,47 @@ Future<void> maybeShowWhatsNew(BuildContext context, AppServices services) async
     await prefs.markWhatsNewShown(build);
     return;
   }
-  final notes = await loadWhatsNew(build);
+  final notes = await services.updates.notesFor(build);
   if (notes == null || !context.mounted) return;
   await prefs.markWhatsNewShown(build);
   if (!context.mounted) return;
   await showWhatsNew(context, notes);
 }
 
-/// Settings → About → What's new: this version's notes again.
+/// Settings → About → What's new: the latest release's notes, from the
+/// website. It checks first (silently):
+/// - on the latest version: its notes;
+/// - behind: the updater opens, with "Update to the latest version";
+/// - newer than the latest public build: "This is an unreleased/modified build";
+/// - offline or any failure: "Unable to load changelogs".
 Future<void> showFullChangelog(BuildContext context, AppServices services) async {
-  final installed = await services.updates.installedRelease();
-  final notes = installed == null ? null : await loadWhatsNew(installed.buildNumber);
+  final updates = services.updates;
+  final state = await updates.check();
   if (!context.mounted) return;
-  if (notes == null) {
-    showSnack(context, 'No release notes for this version yet');
-    return;
+  switch (state) {
+    case UpdateState.available:
+      showSnack(context, 'Update to the latest version');
+      await showUpdaterDialog(context);
+      return;
+    case UpdateState.ahead:
+      showSnack(context, unreleasedBuildMessage);
+      return;
+    case UpdateState.upToDate:
+      final installed = await updates.installedRelease();
+      final notes = installed == null ? null : await updates.notesFor(installed.buildNumber);
+      if (!context.mounted) return;
+      if (notes == null) {
+        showSnack(context, 'Unable to load changelogs', kind: ToastKind.error);
+        return;
+      }
+      await showWhatsNew(context, notes);
+    default:
+      showSnack(context, 'Unable to load changelogs', kind: ToastKind.error);
   }
-  await showWhatsNew(context, notes);
 }
+
+/// The toast for a build newer than the latest public one.
+const unreleasedBuildMessage = 'This is an unreleased/modified build';
 
 Future<void> showWhatsNew(BuildContext context, ChangelogRelease release) {
   return showFetchNetDialog<void>(
@@ -124,8 +131,8 @@ class _WhatsNewDialog extends StatelessWidget {
                       decoration: BoxDecoration(gradient: AppColors.brandGradient),
                       child: Stack(
                         children: [
-                          Positioned(right: -30, top: -40, child: _Ring(size: 150, opacity: 0.16)),
-                          Positioned(left: -24, bottom: -50, child: _Ring(size: 120, opacity: 0.12)),
+                          Positioned(right: -30, top: -40, child: PopupHeaderRing(size: 150, opacity: 0.16)),
+                          Positioned(left: -24, bottom: -50, child: PopupHeaderRing(size: 120, opacity: 0.12)),
                         ],
                       ),
                     ),
@@ -151,7 +158,7 @@ class _WhatsNewDialog extends StatelessWidget {
                   ),
                   const SizedBox(height: 8),
                   Center(
-                    child: _Chip(
+                    child: PopupChip(
                       icon: Icons.new_releases_rounded,
                       text: 'Version ${release.version} · Build ${release.build}',
                     ),
@@ -166,7 +173,7 @@ class _WhatsNewDialog extends StatelessWidget {
                 thumbVisibility: true,
                 child: SingleChildScrollView(
                   padding: const EdgeInsets.fromLTRB(22, 0, 22, 8),
-                  child: _ReleaseCard(release: release, platform: platform),
+                  child: ReleaseNotesCard(release: release, platform: platform),
                 ),
               ),
             ),
@@ -235,8 +242,8 @@ class _WhatsNewDialog extends StatelessWidget {
 
 /// One release: its date and summary, then every section that applies on
 /// this platform (other platforms' groups and "Under the hood" left out).
-class _ReleaseCard extends StatelessWidget {
-  const _ReleaseCard({required this.release, required this.platform});
+class ReleaseNotesCard extends StatelessWidget {
+  const ReleaseNotesCard({super.key, required this.release, required this.platform});
 
   final ChangelogRelease release;
   final String? platform;
@@ -321,8 +328,8 @@ class _SectionView extends StatelessWidget {
   }
 }
 
-class _Chip extends StatelessWidget {
-  const _Chip({required this.icon, required this.text});
+class PopupChip extends StatelessWidget {
+  const PopupChip({super.key, required this.icon, required this.text});
 
   final IconData icon;
   final String text;
@@ -354,8 +361,8 @@ class _Chip extends StatelessWidget {
   }
 }
 
-class _Ring extends StatelessWidget {
-  const _Ring({required this.size, required this.opacity});
+class PopupHeaderRing extends StatelessWidget {
+  const PopupHeaderRing({super.key, required this.size, required this.opacity});
 
   final double size;
   final double opacity;

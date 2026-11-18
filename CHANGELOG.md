@@ -18,6 +18,56 @@ Versions follow `version: <name>+<build>` in `pubspec.yaml`.
 
 ---
 
+## 🚀 v1.2.5 — 2026-11-19
+
+> **Build 5** · A redesigned Home, and updates that download and install right inside FetchNet.
+
+### ✨ Highlights
+
+- 🏠 **A new Home**: a smarter link box, a status deck for everything FetchNet needs to tell you, live progress for each engine, and results as cards with full-screen previews.
+- ⬇️ **In-app updates**: a new updater shows what's new in the latest version, downloads it, and installs it without leaving FetchNet.
+- 🔄 **Relaunch to update** on Windows, like Chrome: the new version is put in place while FetchNet runs.
+
+### 🆕 New
+
+#### 🏠 Home
+
+- 🔗 **Link box**: while empty it cycles through examples of what FetchNet can read; with a link in, it shows which site it's from. It lights up while you type, and a gradient runs around it while the link is read.
+- 📋 **Status deck**: a new FetchNet version, yt-dlp and gallery-dl starting, installing, updating or failing, the download folder, and add-ons to install, as cards that update in place.
+- ⏳ **Reading the link** shows a lane per engine (yt-dlp reading the formats, gallery-dl looking for the post's files) and how long it has been going.
+- 🎚️ **Results as cards**: video qualities, audio formats and YouTube thumbnail sizes, two or three across, with the selected one highlighted.
+- 🖼️ **Full-screen previews** for a post's files: swipe between them, pinch or double-tap to zoom, and pick files while you look at them. A small fanned stack of the post's pictures sits on top.
+- 📥 The downloads running right now appear live on Home, with a shortcut to Downloads.
+- ✨ Smooth entrance and press animations throughout, following Settings → **Show animations** and the system's "remove animations" switch.
+
+#### ⬇️ Updater
+
+- 🪟 A new **updater popup** opens from the **Update** button on Home and in Settings: the new version's changes, then **Download update** with progress, size and speed.
+- 🔎 **Check for Updates** (in *FetchNet for your platform*) now checks right away (**Checking for Updates…**), then opens the updater, or tells you you're already on the latest version.
+- 📰 **What's new** shows the latest release's notes, loaded from the website. When you're not on the latest version, it opens the updater instead.
+- 🧪 On a build newer than the latest public one, **Check for Updates** and **What's new** say so: *"This is an unreleased/modified build"*.
+- 🌐 If an update can't be downloaded or installed in the app, **Open the update page** takes you to the website, as before.
+
+#### 🤖 Android
+
+- 📦 The update is handed to Android's installer. FetchNet downloads the same kind of APK you have installed, so Android always accepts it, and asks once for permission to install apps.
+
+#### 🪟 Windows
+
+- 🔄 The new version is unzipped and put in place while FetchNet runs; **Relaunch** finishes the update. If the new version can't start, FetchNet goes back to the previous one by itself.
+- 👤 FetchNet now installs for your user account (no administrator prompt for updates). Installs in Program Files update through the installer instead.
+
+### 🛠️ Improved
+
+- 🗂️ **No more folder per post**: several files of a post go straight into the **Images**, **Audio** and **Video** folders, numbered after the name you give (`Beach day 1.jpg`, `Beach day 2.jpg`, …). A single file keeps its name as before.
+
+### 🧰 Under the hood
+
+- 🌐 The website publishes `/update-manifest.json` (latest version, download links and notes per platform) and `/changelog.json`; `/releases.json` stays for older versions.
+- 📦 The app no longer ships any release notes: they come from the website.
+
+---
+
 ## 🚀 v1.2.0 — 2026-11-17
 
 > **Build 4** · Images and whole posts, powered by a second self-updating engine (gallery-dl), tidy Images, Audio and Video folders, and downloads that retry by themselves.

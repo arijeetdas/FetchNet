@@ -45,6 +45,10 @@ class MainActivity : FlutterActivity() {
     private var engineEvents: EventChannel.EventSink? = null
     private var galleryEvents: EventChannel.EventSink? = null
     private val galleryDl by lazy { GalleryDl(applicationContext) }
+    private var updaterEvents: EventChannel.EventSink? = null
+    private val appUpdateInstaller by lazy {
+        AppUpdateInstaller(this) { event -> mainHandler.post { updaterEvents?.success(event) } }
+    }
     private var shareEvents: EventChannel.EventSink? = null
     private var pendingSharedText: String? = null
     private var pendingLaunchAction: String? = null
@@ -209,6 +213,50 @@ class MainActivity : FlutterActivity() {
                 else -> result.notImplemented()
             }
         }
+
+        // ───── In-app updates: hand the downloaded APK to Android's installer ─────
+        MethodChannel(messenger, "fetchnet/updater").setMethodCallHandler { call, result ->
+            when (call.method) {
+                "install" -> {
+                    val path = call.argument<String>("path")
+                    when {
+                        path == null || !java.io.File(path).exists() ->
+                            result.success(mapOf("status" to "error", "message" to "The downloaded update is missing."))
+                        !appUpdateInstaller.canInstall() -> result.success(mapOf("status" to "needs_permission"))
+                        else -> executor.execute {
+                            try {
+                                appUpdateInstaller.install(path)
+                                postResult { result.success(mapOf("status" to "started")) }
+                            } catch (e: Throwable) {
+                                Log.e(TAG, "update install failed", e)
+                                postResult { result.success(mapOf("status" to "error", "message" to describe(e))) }
+                            }
+                        }
+                    }
+                }
+
+                "openInstallPermission" -> {
+                    try {
+                        appUpdateInstaller.openPermissionSettings()
+                        result.success(true)
+                    } catch (e: Exception) {
+                        result.error("unavailable", e.message, null)
+                    }
+                }
+
+                else -> result.notImplemented()
+            }
+        }
+
+        EventChannel(messenger, "fetchnet/updater/events").setStreamHandler(object : EventChannel.StreamHandler {
+            override fun onListen(arguments: Any?, events: EventChannel.EventSink?) {
+                updaterEvents = events
+            }
+
+            override fun onCancel(arguments: Any?) {
+                updaterEvents = null
+            }
+        })
 
         EventChannel(messenger, "fetchnet/gallerydl/events").setStreamHandler(object : EventChannel.StreamHandler {
             override fun onListen(arguments: Any?, events: EventChannel.EventSink?) {

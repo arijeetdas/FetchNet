@@ -1,5 +1,3 @@
-import 'dart:async';
-
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -8,6 +6,7 @@ import '../../core/app_services.dart';
 import '../../core/format.dart';
 import '../../core/platform/device_environment.dart';
 import '../../engine/engine.dart';
+import '../../models/download_models.dart';
 import '../../models/gallery_models.dart';
 import '../../models/media_info.dart';
 import '../../services/fetch_service.dart';
@@ -16,16 +15,20 @@ import '../../services/sites_service.dart';
 import '../../services/web_session.dart';
 import '../../widgets/app_dialog.dart';
 import '../../widgets/brand.dart';
+import '../../widgets/kind_icon.dart';
 import '../../widgets/motion/living_logo.dart';
+import '../../widgets/motion/motion_core.dart';
 import '../browser/browser_screen.dart';
 import '../shell/home_shell.dart';
-import '../shell/update_banner.dart';
 import '../youtube/youtube_screen.dart';
 import '../youtube/youtube_settings_screen.dart';
-import 'engine_banner.dart';
+import 'fetch_progress.dart';
+import 'home_kit.dart';
+import 'link_dock.dart';
 import 'media_result_view.dart';
 import 'post_result_view.dart';
 import 'sites_panel.dart';
+import 'status_deck.dart';
 
 enum _Phase { idle, loading, error, result }
 
@@ -54,6 +57,10 @@ class _HomeScreenState extends State<HomeScreen> {
   String? _lastUrl;
   List<String> _lastArgs = const [];
   int _requestToken = 0;
+
+  /// What each engine is doing while a link is read (the progress card).
+  LaneState _ytLane = LaneState.waiting;
+  LaneState _galleryLane = LaneState.waiting;
 
   @override
   void initState() {
@@ -107,20 +114,26 @@ class _HomeScreenState extends State<HomeScreen> {
     if (url == null) return;
     _focus.unfocus();
     final token = ++_requestToken;
+    final gallery = _services.gallery;
+    final galleryAllowed = gallery.enabled && !isYouTubeLink(url);
     setState(() {
       _phase = _Phase.loading;
       _error = null;
       _lastUrl = url;
       _lastArgs = requestArgs;
+      _ytLane = LaneState.waiting;
+      _galleryLane = galleryAllowed ? LaneState.working : LaneState.skipped;
     });
     // Sites gallery-dl knows (posts, galleries) are looked up by both engines
     // at once; yt-dlp's answer shows first and the post joins it.
-    final gallery = _services.gallery;
-    final galleryAllowed = gallery.enabled && !isYouTubeLink(url);
     Future<GalleryPost>? post =
         galleryAllowed && await gallery.supports(url) == true ? gallery.fetch(url, requestArgs: requestArgs) : null;
     post?.ignore(); // Errors are read below; never unhandled.
     if (!mounted || token != _requestToken) return;
+    setState(() {
+      _ytLane = LaneState.working;
+      if (post == null && galleryAllowed) _galleryLane = LaneState.waiting;
+    });
 
     MediaInfo info;
     try {
@@ -142,6 +155,10 @@ class _HomeScreenState extends State<HomeScreen> {
         });
         return;
       }
+      setState(() {
+        _ytLane = LaneState.failed;
+        _galleryLane = LaneState.working;
+      });
       try {
         final found = await post;
         if (!mounted || token != _requestToken) return;
@@ -248,27 +265,53 @@ class _HomeScreenState extends State<HomeScreen> {
     } else {
       body = media ?? postView!;
     }
-    if (!_postLoading) return body;
     final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
     return Column(
-      key: ValueKey('loading-post-${info?.url}'),
+      key: ValueKey('result-${info?.url ?? post?.url}'),
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         body,
-        const SizedBox(height: 10),
-        Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            const EnergyLoader(size: 20),
-            const SizedBox(width: 10),
-            Flexible(
-              child: Text(
-                'Looking for images and other files in this post…',
-                style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+        AnimatedSize(
+          duration: homeDuration(context, const Duration(milliseconds: 300)),
+          curve: Curves.easeOutCubic,
+          child: !_postLoading
+              ? const SizedBox(width: double.infinity)
+              : Padding(
+                  padding: const EdgeInsets.only(top: 12),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                    decoration: BoxDecoration(
+                      color: scheme.primaryContainer.withValues(alpha: 0.35),
+                      borderRadius: BorderRadius.circular(16),
+                    ),
+                    child: Row(
+                      children: [
+                        const EnergyLoader(size: 20),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Text(
+                            'gallery-dl is looking for images and other files in this post…',
+                            style: theme.textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+        ),
+        if (!(info?.isPlaylist ?? false) && post?.items.isEmpty != true)
+          Padding(
+            padding: const EdgeInsets.only(top: 10),
+            child: Center(
+              child: TextButton.icon(
+                onPressed: () => _openBrowserMode(_lastUrl),
+                icon: const Icon(Icons.travel_explore_rounded, size: 18),
+                label: const Text('Not the right media? Try Browser Mode'),
+                style: TextButton.styleFrom(foregroundColor: scheme.onSurfaceVariant),
               ),
             ),
-          ],
-        ),
+          ),
       ],
     );
   }
@@ -385,11 +428,46 @@ class _HomeScreenState extends State<HomeScreen> {
     await _fetch(url: url, requestArgs: ['--cookies-from-browser', picked]);
   }
 
+  Widget _phaseView() {
+    return switch (_phase) {
+      _Phase.idle => Center(
+        key: const ValueKey('idle'),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 760),
+          child: _Capabilities(onTap: () => _focus.requestFocus()),
+        ),
+      ),
+      _Phase.loading => FetchProgressCard(
+        key: ValueKey('loading-$_requestToken'),
+        host: _hostOf(_lastUrl),
+        ytdlp: _ytLane,
+        gallery: _galleryLane,
+        onCancel: _cancelFetch,
+      ),
+      _Phase.error => _ErrorCard(
+        key: ValueKey('error-$_requestToken'),
+        error: _error!,
+        onRetry: () => _fetch(url: _lastUrl, requestArgs: _lastArgs),
+        onBrowser: () => _openBrowserMode(_lastUrl),
+        onCookies: DeviceEnvironment.isDesktop ? () => _useBrowserCookies(_lastUrl) : null,
+        onYouTubeSignIn: isYouTubeUrl(_lastUrl) && !_services.youtube.signedIn && BrowserScreen.isSupported
+            ? _openYouTubeSettings
+            : null,
+      ),
+      _Phase.result => _buildResult(),
+    };
+  }
+
+  static String? _hostOf(String? url) {
+    final host = Uri.tryParse(url ?? '')?.host.toLowerCase();
+    if (host == null || host.isEmpty) return null;
+    return host.startsWith('www.') ? host.substring(4) : host;
+  }
+
   @override
   Widget build(BuildContext context) {
     final wide = Breakpoints.isWide(context);
-    final theme = Theme.of(context);
-    final scheme = theme.colorScheme;
+    final idle = _phase == _Phase.idle;
 
     final content = SafeArea(
       bottom: false,
@@ -399,7 +477,7 @@ class _HomeScreenState extends State<HomeScreen> {
           SliverPadding(
             padding: EdgeInsets.fromLTRB(
               wide ? 28 : 16,
-              wide ? 28 : 12,
+              wide ? 24 : 10,
               wide ? 28 : 16,
               32 + MediaQuery.paddingOf(context).bottom,
             ),
@@ -407,62 +485,63 @@ class _HomeScreenState extends State<HomeScreen> {
               maxExtent: 1080,
               sliver: SliverList.list(
                 children: [
-                  const _Hero(),
+                  const EntranceMotion(child: _Header()),
                   const SizedBox(height: 16),
-                  // App update first, then yt-dlp / add-on setup and updates.
-                  const UpdateBanner(),
-                  const EngineBanner(),
-                  const Center(child: LivingLogo()),
-                  const SizedBox(height: 14),
+                  // App update, then yt-dlp / gallery-dl / add-on setup and updates.
+                  const StatusDeck(),
+                  // The living logo and the promise, while nothing is fetched.
+                  AnimatedSize(
+                    duration: homeDuration(context, const Duration(milliseconds: 420)),
+                    curve: Curves.easeOutCubic,
+                    alignment: Alignment.topCenter,
+                    child: idle ? const _Hero() : const SizedBox(width: double.infinity),
+                  ),
                   Center(
                     child: ConstrainedBox(
-                      constraints: const BoxConstraints(maxWidth: 720),
-                      child: _LinkCard(
-                        controller: _controller,
-                        focusNode: _focus,
-                        loading: _phase == _Phase.loading,
-                        onFetch: () => _fetch(),
-                        onPaste: _paste,
-                        onClear: _clear,
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 20),
-                  AnimatedSwitcher(
-                    duration: const Duration(milliseconds: 300),
-                    child: switch (_phase) {
-                      _Phase.idle => const _IdleHints(key: ValueKey('idle')),
-                      _Phase.loading => _LoadingCard(key: const ValueKey('loading'), onCancel: _cancelFetch),
-                      _Phase.error => _ErrorCard(
-                        key: const ValueKey('error'),
-                        error: _error!,
-                        onRetry: () => _fetch(url: _lastUrl, requestArgs: _lastArgs),
-                        onBrowser: () => _openBrowserMode(_lastUrl),
-                        onCookies: DeviceEnvironment.isDesktop ? () => _useBrowserCookies(_lastUrl) : null,
-                        onYouTubeSignIn: isYouTubeUrl(_lastUrl) && !_services.youtube.signedIn && BrowserScreen.isSupported
-                            ? _openYouTubeSettings
-                            : null,
-                      ),
-                      _Phase.result => _buildResult(),
-                    },
-                  ),
-                  if (_phase == _Phase.result && !(_info?.isPlaylist ?? false) && _post?.items.isEmpty != true)
-                    Padding(
-                      padding: const EdgeInsets.only(top: 12),
-                      child: Center(
-                        child: TextButton.icon(
-                          onPressed: () => _openBrowserMode(_lastUrl),
-                          icon: const Icon(Icons.travel_explore_rounded, size: 18),
-                          label: const Text('Not the right media? Try Browser Mode'),
-                          style: TextButton.styleFrom(foregroundColor: scheme.onSurfaceVariant),
+                      constraints: const BoxConstraints(maxWidth: 760),
+                      child: EntranceMotion(
+                        index: 2,
+                        child: LinkDock(
+                          controller: _controller,
+                          focusNode: _focus,
+                          loading: _phase == _Phase.loading,
+                          onFetch: () => _fetch(),
+                          onPaste: _paste,
+                          onClear: _clear,
                         ),
                       ),
                     ),
+                  ),
+                  const SizedBox(height: 20),
+                  AnimatedSize(
+                    duration: homeDuration(context, const Duration(milliseconds: 380)),
+                    curve: Curves.easeOutCubic,
+                    alignment: Alignment.topCenter,
+                    child: AnimatedSwitcher(
+                      duration: homeDuration(context, const Duration(milliseconds: 360)),
+                      switchInCurve: expoOutCurve,
+                      switchOutCurve: Curves.easeIn,
+                      transitionBuilder: (child, a) => FadeTransition(
+                        opacity: a,
+                        child: SlideTransition(
+                          position: Tween(begin: const Offset(0, 0.03), end: Offset.zero).animate(a),
+                          child: ScaleTransition(scale: Tween(begin: 0.985, end: 1.0).animate(a), child: child),
+                        ),
+                      ),
+                      layoutBuilder: (current, previous) =>
+                          Stack(alignment: Alignment.topCenter, children: [...previous, ?current]),
+                      child: _phaseView(),
+                    ),
+                  ),
+                  const _ActiveDownloads(),
                   const SizedBox(height: 20),
                   Center(
                     child: ConstrainedBox(
-                      constraints: const BoxConstraints(maxWidth: 720),
-                      child: SitesPanel(onOpen: _openSite, onBrowser: () => _openBrowserMode()),
+                      constraints: const BoxConstraints(maxWidth: 760),
+                      child: EntranceMotion(
+                        index: 4,
+                        child: SitesPanel(onOpen: _openSite, onBrowser: () => _openBrowserMode()),
+                      ),
                     ),
                   ),
                 ],
@@ -476,6 +555,55 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 }
 
+// ───────────── Header & hero ─────────────
+
+class _Header extends StatelessWidget {
+  const _Header();
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    final wide = Breakpoints.isWide(context);
+    if (wide) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('What do you want to save today?', style: theme.textTheme.headlineMedium),
+          const SizedBox(height: 2),
+          Text(
+            'Videos, music, images and whole posts from YouTube and 1000+ other sites.',
+            style: theme.textTheme.bodyMedium?.copyWith(color: scheme.onSurfaceVariant),
+          ),
+        ],
+      );
+    }
+    return Row(
+      children: [
+        const FetchNetLogo(size: 46),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              GradientText(
+                'FetchNet',
+                style: theme.textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w900, letterSpacing: -0.8, height: 1.1),
+              ),
+              Text(
+                'Paste. Pick. Done.',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: theme.textTheme.labelLarge?.copyWith(color: scheme.onSurfaceVariant, fontWeight: FontWeight.w600),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
 class _Hero extends StatelessWidget {
   const _Hero();
 
@@ -484,49 +612,30 @@ class _Hero extends StatelessWidget {
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
     final wide = Breakpoints.isWide(context);
-    return AnimatedSize(
-      duration: const Duration(milliseconds: 300),
-      curve: Curves.easeOutCubic,
-      alignment: Alignment.topCenter,
-      child: Row(
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 16),
+      child: Column(
         children: [
-          if (!wide) ...[const FetchNetLogo(size: 72), const SizedBox(width: 16)],
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                if (!wide)
-                  GradientText(
-                    'FetchNet',
-                    style: theme.textTheme.headlineLarge?.copyWith(
-                      fontWeight: FontWeight.w900,
-                      letterSpacing: -1.2,
-                      height: 1.1,
-                    ),
-                  )
-                else
-                  Text('What do you want to save today?', style: theme.textTheme.headlineMedium),
-                if (wide)
-                  Text(
-                    'Paste a link from YouTube or any of 1000+ supported sites.',
-                    style: theme.textTheme.bodyMedium?.copyWith(color: scheme.onSurfaceVariant),
-                  )
-                else
-                  // One line on every phone: shrinks only as much as a narrow
-                  // screen needs instead of leaving "Done." on its own line.
-                  FittedBox(
-                    fit: BoxFit.scaleDown,
-                    alignment: Alignment.centerLeft,
-                    child: Text(
-                      'Paste a link. Pick a quality. Done.',
-                      maxLines: 1,
-                      style: theme.textTheme.bodyLarge?.copyWith(
-                        color: scheme.onSurfaceVariant,
-                        fontWeight: FontWeight.w500,
-                      ),
-                    ),
-                  ),
-              ],
+          EntranceMotion(child: LivingLogo(size: wide ? 132 : 116)),
+          const SizedBox(height: 4),
+          EntranceMotion(
+            index: 1,
+            child: FittedBox(
+              fit: BoxFit.scaleDown,
+              child: Text(
+                'Paste a link. Pick a quality. Done.',
+                maxLines: 1,
+                style: theme.textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w900, letterSpacing: -0.4),
+              ),
+            ),
+          ),
+          const SizedBox(height: 4),
+          EntranceMotion(
+            index: 2,
+            child: Text(
+              'Video up to 4K, MP3 and M4A, and every image of a post.',
+              textAlign: TextAlign.center,
+              style: theme.textTheme.bodyMedium?.copyWith(color: scheme.onSurfaceVariant),
             ),
           ),
         ],
@@ -535,180 +644,262 @@ class _Hero extends StatelessWidget {
   }
 }
 
-class _LinkCard extends StatelessWidget {
-  const _LinkCard({
-    required this.controller,
-    required this.focusNode,
-    required this.loading,
-    required this.onFetch,
-    required this.onPaste,
-    required this.onClear,
-  });
+// ───────────── Idle: what FetchNet can save ─────────────
 
-  final TextEditingController controller;
-  final FocusNode focusNode;
-  final bool loading;
-  final VoidCallback onFetch;
-  final VoidCallback onPaste;
-  final VoidCallback onClear;
+class _Capabilities extends StatelessWidget {
+  const _Capabilities({required this.onTap});
+
+  /// Tapping a card puts the cursor in the link field.
+  final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
     final services = AppScope.of(context);
-    return ValueListenableBuilder<EngineStatus>(
-      valueListenable: services.engine.status,
-      builder: (context, status, _) {
-        final canFetch = status.isReady && !loading && controller.text.trim().isNotEmpty;
-        return Builder(
-          builder: (context) {
-            final field = TextField(
-              controller: controller,
-              focusNode: focusNode,
-              keyboardType: TextInputType.url,
-              textInputAction: TextInputAction.go,
-              autocorrect: false,
-              enableSuggestions: false,
-              onSubmitted: (_) => canFetch ? onFetch() : null,
-              decoration: InputDecoration(
-                hintText: 'Paste a video or audio link',
-                prefixIcon: const Icon(Icons.link_rounded),
-                suffixIcon: controller.text.isEmpty
-                    ? IconButton(
-                        tooltip: 'Paste',
-                        icon: const Icon(Icons.content_paste_rounded),
-                        onPressed: loading ? null : onPaste,
-                      )
-                    : IconButton(tooltip: 'Clear', icon: const Icon(Icons.close_rounded), onPressed: onClear),
+    final galleryOn = services.gallery.enabled;
+    final items = [
+      (Icons.movie_rounded, 'Video', 'Up to 4K, with its sound', true),
+      (Icons.music_note_rounded, 'Audio', 'MP3 and M4A, with cover art', true),
+      (Icons.collections_rounded, 'Images & posts', galleryOn ? 'Every file of a post or gallery' : 'Turn on in Settings → Engines', galleryOn),
+      (Icons.sell_rounded, 'Thumbnails & tags', 'YouTube covers in every size', true),
+    ];
+    return LayoutBuilder(
+      builder: (context, c) {
+        const gap = 10.0;
+        final columns = c.maxWidth >= 720 ? 4 : 2;
+        final width = (c.maxWidth - gap * (columns - 1)) / columns;
+        return Wrap(
+          spacing: gap,
+          runSpacing: gap,
+          children: [
+            for (final (i, (icon, title, body, on)) in items.indexed)
+              SizedBox(
+                width: width,
+                child: EntranceMotion(
+                  index: i,
+                  delay: const Duration(milliseconds: 120),
+                  child: _CapabilityCard(icon: icon, title: title, body: body, enabled: on, onTap: onTap),
+                ),
               ),
-            );
-            final fetch = GradientButton(
-              label: 'Fetch',
-              icon: Icons.bolt_rounded,
-              loading: loading,
-              expand: true,
-              onPressed: canFetch ? onFetch : null,
-            );
-            return Container(
-              padding: const EdgeInsets.all(14),
-              decoration: BoxDecoration(
-                color: scheme.surfaceContainerLow.withValues(alpha: 0.9),
-                borderRadius: BorderRadius.circular(28),
-                border: Border.all(color: scheme.outlineVariant.withValues(alpha: 0.35)),
-                boxShadow: [
-                  BoxShadow(color: scheme.primary.withValues(alpha: 0.06), blurRadius: 30, offset: const Offset(0, 12)),
-                ],
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [field, const SizedBox(height: 12), fetch],
-              ),
-            );
-          },
+          ],
         );
       },
     );
   }
 }
 
-class _IdleHints extends StatelessWidget {
-  const _IdleHints({super.key});
+class _CapabilityCard extends StatelessWidget {
+  const _CapabilityCard({required this.icon, required this.title, required this.body, required this.enabled, required this.onTap});
+
+  final IconData icon;
+  final String title;
+  final String body;
+  final bool enabled;
+  final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
-    const tips = [
-      (Icons.content_paste_go_rounded, 'Paste & fetch', 'Copy a link from any app and tap the paste icon.'),
-      (Icons.tune_rounded, 'Choose a format', 'Video up to 4K, or MP3 / M4A audio.'),
-      (Icons.travel_explore_rounded, 'Stuck?', 'Open a site below in the built-in browser to grab media from any page.'),
-    ];
-    return LayoutBuilder(
-      builder: (context, c) {
-        final columns = c.maxWidth >= 720 ? 3 : 1;
-        final tiles = [
-          for (final (icon, title, body) in tips)
-            Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: scheme.surfaceContainerLowest.withValues(alpha: 0.55),
-                borderRadius: BorderRadius.circular(22),
-                border: Border.all(color: scheme.outlineVariant.withValues(alpha: 0.3)),
-              ),
-              child: Row(
+    return PressableScale(
+      child: Material(
+        color: scheme.surfaceContainerLowest.withValues(alpha: 0.6),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(22),
+          side: BorderSide(color: scheme.outlineVariant.withValues(alpha: 0.3)),
+        ),
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          onTap: onTap,
+          child: Opacity(
+            opacity: enabled ? 1 : 0.6,
+            child: Padding(
+              padding: const EdgeInsets.all(14),
+              child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Icon(icon, color: scheme.primary),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(title, style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w800)),
-                        const SizedBox(height: 2),
-                        Text(
-                          body,
-                          style: theme.textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant, height: 1.4),
-                        ),
-                      ],
+                  Container(
+                    width: 38,
+                    height: 38,
+                    decoration: BoxDecoration(
+                      gradient: enabled ? tileGradient : null,
+                      color: enabled ? null : scheme.surfaceContainerHighest,
+                      borderRadius: BorderRadius.circular(12),
+                      boxShadow: enabled
+                          ? [BoxShadow(color: AppColors.violetBright.withValues(alpha: 0.25), blurRadius: 12, offset: const Offset(0, 5))]
+                          : null,
                     ),
+                    child: Icon(icon, color: enabled ? Colors.white : scheme.onSurfaceVariant, size: 20),
+                  ),
+                  const SizedBox(height: 10),
+                  Text(title, style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w800)),
+                  const SizedBox(height: 2),
+                  Text(
+                    body,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: theme.textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant, height: 1.35),
                   ),
                 ],
               ),
             ),
-        ];
-        if (columns == 1) {
-          return Column(
-            children: [for (final t in tiles) Padding(padding: const EdgeInsets.only(bottom: 10), child: t)],
-          );
-        }
-        return IntrinsicHeight(
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              for (var i = 0; i < tiles.length; i++) ...[
-                if (i > 0) const SizedBox(width: 12),
-                Expanded(child: tiles[i]),
-              ],
-            ],
           ),
+        ),
+      ),
+    );
+  }
+}
+
+// ───────────── Downloads in progress ─────────────
+
+/// The downloads running right now, live, with a shortcut to Downloads.
+class _ActiveDownloads extends StatelessWidget {
+  const _ActiveDownloads();
+
+  @override
+  Widget build(BuildContext context) {
+    final services = AppScope.of(context);
+    return ListenableBuilder(
+      listenable: services.downloads,
+      builder: (context, _) {
+        final active = services.downloads.tasks.where((t) => t.isActive).toList();
+        final theme = Theme.of(context);
+        final scheme = theme.colorScheme;
+        return AnimatedSize(
+          duration: homeDuration(context, const Duration(milliseconds: 340)),
+          curve: Curves.easeOutCubic,
+          alignment: Alignment.topCenter,
+          child: active.isEmpty
+              ? const SizedBox(width: double.infinity)
+              : Padding(
+                  padding: const EdgeInsets.only(top: 20),
+                  child: Center(
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(maxWidth: 760),
+                      child: EntranceMotion(
+                        child: HomePanel(
+                          padding: const EdgeInsets.fromLTRB(14, 12, 8, 12),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              Row(
+                                children: [
+                                  PulseDot(color: scheme.primary, size: 9),
+                                  const SizedBox(width: 6),
+                                  Expanded(
+                                    child: Text(
+                                      active.length == 1 ? 'Downloading now' : 'Downloading now · ${active.length}',
+                                      style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w800),
+                                    ),
+                                  ),
+                                  TextButton.icon(
+                                    onPressed: () => services.tabRequest.value = 1,
+                                    icon: const Icon(Icons.arrow_forward_rounded, size: 18),
+                                    label: const Text('Downloads'),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 4),
+                              for (final t in active.take(3))
+                                Padding(
+                                  key: ValueKey(t.id),
+                                  padding: const EdgeInsets.only(top: 6, right: 6),
+                                  child: _TaskRow(task: t),
+                                ),
+                              if (active.length > 3)
+                                Padding(
+                                  padding: const EdgeInsets.only(top: 8),
+                                  child: Text(
+                                    '+${active.length - 3} more in Downloads',
+                                    style: theme.textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
+                                  ),
+                                ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
         );
       },
     );
   }
 }
 
-class _LoadingCard extends StatelessWidget {
-  const _LoadingCard({super.key, required this.onCancel});
+class _TaskRow extends StatelessWidget {
+  const _TaskRow({required this.task});
 
-  final VoidCallback onCancel;
+  final DownloadTask task;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(22),
-        child: Column(
-          children: [
-            const SizedBox(height: 6),
-            const EnergyLoader(size: 64),
-            const SizedBox(height: 18),
-            Text('Reading the link…', style: theme.textTheme.titleMedium),
-            const SizedBox(height: 4),
-            Text(
-              'Looking up the available formats. This can take a few seconds.',
-              textAlign: TextAlign.center,
-              style: theme.textTheme.bodyMedium?.copyWith(color: theme.colorScheme.onSurfaceVariant),
-            ),
-            const SizedBox(height: 12),
-            TextButton(onPressed: onCancel, child: const Text('Cancel')),
-          ],
+    final scheme = theme.colorScheme;
+    final p = task.progress;
+    final files = task.option.gallery?.count;
+    final line = switch (task.status) {
+      DownloadStatus.queued => 'Waiting in line',
+      DownloadStatus.starting => 'Starting…',
+      DownloadStatus.processing => task.stage ?? 'Finishing up…',
+      _ => [
+          if (p != null) '${(p * 100).round()}%',
+          if (files != null && files > 1) '${task.filesDone} of $files files',
+          formatSpeed(task.speed),
+          formatEta(task.eta),
+        ].where((s) => s.isNotEmpty).join(' · '),
+    };
+    final thumb = task.thumbnail;
+    return Row(
+      children: [
+        ClipRRect(
+          borderRadius: BorderRadius.circular(10),
+          child: SizedBox(
+            width: 56,
+            height: 36,
+            child: thumb == null
+                ? DecoratedBox(
+                    decoration: const BoxDecoration(gradient: tileGradient),
+                    child: Icon(kindIcon(task.option.kind), color: Colors.white, size: 18),
+                  )
+                : FadeInNetworkImage(
+                    url: thumb,
+                    cacheWidth: 160,
+                    fallback: DecoratedBox(
+                      decoration: const BoxDecoration(gradient: tileGradient),
+                      child: Icon(kindIcon(task.option.kind), color: Colors.white, size: 18),
+                    ),
+                  ),
+          ),
         ),
-      ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text(
+                task.title,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: theme.textTheme.labelLarge?.copyWith(fontWeight: FontWeight.w700),
+              ),
+              const SizedBox(height: 4),
+              GradientProgressBar(value: task.status == DownloadStatus.downloading ? p : null, height: 5),
+              const SizedBox(height: 3),
+              Text(
+                line.isEmpty ? 'Downloading…' : line,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: theme.textTheme.labelSmall?.copyWith(color: scheme.onSurfaceVariant),
+              ),
+            ],
+          ),
+        ),
+      ],
     );
   }
 }
+
+// ───────────── Errors ─────────────
 
 class _ErrorCard extends StatelessWidget {
   const _ErrorCard({
@@ -740,78 +931,101 @@ class _ErrorCard extends StatelessWidget {
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
     final signIn = onYouTubeSignIn != null && _needsSignIn(error.message);
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(20),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Row(
+    return HomePanel(
+      padding: const EdgeInsets.all(18),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 46,
+                height: 46,
+                decoration: BoxDecoration(
+                  color: scheme.errorContainer,
+                  borderRadius: BorderRadius.circular(15),
+                  boxShadow: [BoxShadow(color: scheme.error.withValues(alpha: 0.2), blurRadius: 14, offset: const Offset(0, 6))],
+                ),
+                child: Icon(Icons.search_off_rounded, color: scheme.onErrorContainer),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('Couldn\'t get this media', style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800)),
+                    Text(
+                      'Neither engine could read the link directly.',
+                      style: theme.textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          Text(
+            signIn
+                ? 'YouTube wants a signed-in account for this video. Sign in with Google in YouTube Settings, '
+                    'then try again.'
+                : error.hint ??
+                    'FetchNet couldn\'t read this link directly. Browser Mode lets you open the page, play the media, and grab it from there.',
+            style: theme.textTheme.bodyMedium?.copyWith(height: 1.45),
+          ),
+          const SizedBox(height: 6),
+          Theme(
+            data: theme.copyWith(dividerColor: Colors.transparent),
+            child: ExpansionTile(
+              tilePadding: EdgeInsets.zero,
+              childrenPadding: const EdgeInsets.only(bottom: 8),
+              title: Text('Details', style: theme.textTheme.labelLarge?.copyWith(color: scheme.onSurfaceVariant)),
               children: [
                 Container(
-                  width: 44,
-                  height: 44,
-                  decoration: BoxDecoration(color: scheme.errorContainer, borderRadius: BorderRadius.circular(14)),
-                  child: Icon(Icons.search_off_rounded, color: scheme.onErrorContainer),
-                ),
-                const SizedBox(width: 14),
-                Expanded(child: Text('Couldn\'t get this media', style: theme.textTheme.titleMedium)),
-              ],
-            ),
-            const SizedBox(height: 14),
-            Text(
-              signIn
-                  ? 'YouTube wants a signed-in account for this video. Sign in with Google in YouTube Settings, '
-                      'then try again.'
-                  : error.hint ??
-                      'FetchNet couldn\'t read this link directly. Browser Mode lets you open the page, play the media, and grab it from there.',
-              style: theme.textTheme.bodyMedium?.copyWith(height: 1.45),
-            ),
-            const SizedBox(height: 10),
-            Theme(
-              data: theme.copyWith(dividerColor: Colors.transparent),
-              child: ExpansionTile(
-                tilePadding: EdgeInsets.zero,
-                childrenPadding: const EdgeInsets.only(bottom: 8),
-                title: Text('Details', style: theme.textTheme.labelLarge?.copyWith(color: scheme.onSurfaceVariant)),
-                children: [
-                  SelectableText(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: scheme.surfaceContainerLowest,
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: SelectableText(
                     error.message,
                     style: theme.textTheme.bodySmall?.copyWith(fontFamily: 'monospace', color: scheme.onSurfaceVariant),
                   ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 4),
-            Wrap(
-              spacing: 10,
-              runSpacing: 10,
-              children: [
-                if (signIn)
-                  GradientButton(label: 'Sign in to YouTube', icon: Icons.login_rounded, onPressed: onYouTubeSignIn)
-                else
-                  GradientButton(label: 'Open in Browser Mode', icon: Icons.travel_explore_rounded, onPressed: onBrowser),
-                if (onCookies != null)
-                  OutlinedButton.icon(
-                    onPressed: onCookies,
-                    icon: const Icon(Icons.cookie_outlined),
-                    label: const Text('Use browser sign-in'),
-                    style: OutlinedButton.styleFrom(minimumSize: const Size(0, 54)),
-                  ),
-                OutlinedButton.icon(
-                  onPressed: onRetry,
-                  icon: const Icon(Icons.refresh_rounded),
-                  label: const Text('Try again'),
-                  style: OutlinedButton.styleFrom(minimumSize: const Size(0, 54)),
                 ),
               ],
             ),
-          ],
-        ),
+          ),
+          const SizedBox(height: 4),
+          Wrap(
+            spacing: 10,
+            runSpacing: 10,
+            children: [
+              if (signIn)
+                GradientButton(label: 'Sign in to YouTube', icon: Icons.login_rounded, onPressed: onYouTubeSignIn)
+              else
+                GradientButton(label: 'Open in Browser Mode', icon: Icons.travel_explore_rounded, onPressed: onBrowser),
+              if (onCookies != null)
+                OutlinedButton.icon(
+                  onPressed: onCookies,
+                  icon: const Icon(Icons.cookie_outlined),
+                  label: const Text('Use browser sign-in'),
+                  style: OutlinedButton.styleFrom(minimumSize: const Size(0, 54)),
+                ),
+              OutlinedButton.icon(
+                onPressed: onRetry,
+                icon: const Icon(Icons.refresh_rounded),
+                label: const Text('Try again'),
+                style: OutlinedButton.styleFrom(minimumSize: const Size(0, 54)),
+              ),
+            ],
+          ),
+        ],
       ),
     );
   }
 }
+
+// ───────────── Playlists ─────────────
 
 class _PlaylistView extends StatelessWidget {
   const _PlaylistView({super.key, required this.info, required this.onPick});
@@ -823,56 +1037,93 @@ class _PlaylistView extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
+    final entries = info.entries.take(200).toList();
+    return HomePanel(
+      highlight: true,
+      padding: const EdgeInsets.fromLTRB(14, 16, 14, 10),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          HomeSectionTitle(
+            icon: Icons.playlist_play_rounded,
+            title: info.title,
+            subtitle: [
+              '${info.entries.length} items',
+              ?info.uploader,
+              'pick one to download',
+            ].join(' · '),
+          ),
+          const SizedBox(height: 12),
+          for (final (i, entry) in entries.indexed)
             Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 20),
-              child: Row(
-                children: [
-                  Icon(Icons.playlist_play_rounded, color: scheme.primary),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          info.title,
-                          style: theme.textTheme.titleMedium,
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
+              padding: const EdgeInsets.only(bottom: 6),
+              child: EntranceMotion(
+                index: i,
+                step: const Duration(milliseconds: 30),
+                offset: 10,
+                child: PressableScale(
+                  scale: 0.98,
+                  child: Material(
+                    color: scheme.surfaceContainerLowest.withValues(alpha: 0.7),
+                    borderRadius: BorderRadius.circular(16),
+                    clipBehavior: Clip.antiAlias,
+                    child: InkWell(
+                      onTap: () => onPick(entry),
+                      child: Padding(
+                        padding: const EdgeInsets.all(8),
+                        child: Row(
+                          children: [
+                            ClipRRect(
+                              borderRadius: BorderRadius.circular(11),
+                              child: SizedBox(
+                                width: 96,
+                                height: 54,
+                                child: Stack(
+                                  fit: StackFit.expand,
+                                  children: [
+                                    if (entry.thumbnail != null)
+                                      FadeInNetworkImage(
+                                        url: entry.thumbnail!,
+                                        cacheWidth: 240,
+                                        fallback: ColoredBox(color: scheme.surfaceContainerHighest),
+                                      )
+                                    else
+                                      const DecoratedBox(decoration: BoxDecoration(gradient: tileGradient)),
+                                    Positioned(left: 4, top: 4, child: OverlayPill(text: '${i + 1}')),
+                                    if (entry.duration != null)
+                                      Positioned(right: 4, bottom: 4, child: OverlayPill(text: formatDuration(entry.duration))),
+                                  ],
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Text(
+                                entry.title,
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                                style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700, height: 1.3),
+                              ),
+                            ),
+                            Icon(Icons.chevron_right_rounded, color: scheme.onSurfaceVariant),
+                          ],
                         ),
-                        Text(
-                          '${info.entries.length} items · pick one to download',
-                          style: theme.textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
-                        ),
-                      ],
+                      ),
                     ),
                   ),
-                ],
+                ),
               ),
             ),
-            const SizedBox(height: 8),
-            for (final (i, entry) in info.entries.take(200).indexed)
-              ListTile(
-                contentPadding: const EdgeInsets.symmetric(horizontal: 20),
-                leading: CircleAvatar(
-                  backgroundColor: scheme.primaryContainer,
-                  child: Text(
-                    '${i + 1}',
-                    style: TextStyle(color: scheme.onPrimaryContainer, fontSize: 12, fontWeight: FontWeight.w800),
-                  ),
-                ),
-                title: Text(entry.title, maxLines: 2, overflow: TextOverflow.ellipsis),
-                subtitle: entry.duration == null ? null : Text(formatDuration(entry.duration)),
-                trailing: const Icon(Icons.chevron_right_rounded),
-                onTap: () => onPick(entry),
+          if (info.entries.length > entries.length)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 6),
+              child: Text(
+                'Showing the first ${entries.length}.',
+                textAlign: TextAlign.center,
+                style: theme.textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
               ),
-          ],
-        ),
+            ),
+        ],
       ),
     );
   }

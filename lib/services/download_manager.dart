@@ -153,8 +153,8 @@ class DownloadManager extends ChangeNotifier {
       } catch (_) {}
       await NativeBridge.scanFile(path);
     }
-    // A post's own folders go once empty; the FetchNet folder and its type
-    // folders always stay.
+    // Posts saved by v1.2.0 had a folder of their own: it goes once empty.
+    // The FetchNet folder and its type folders always stay.
     final root = storage.downloadDir;
     if (entry.files.length > 1 && root != null) {
       final keep = {root, for (final f in MediaFolder.values) p.join(root, f.folderName)};
@@ -495,36 +495,20 @@ class DownloadManager extends ChangeNotifier {
     }
   }
 
-  /// Files a post's downloads into the type folders: every image into
-  /// `Images`, audio into `Audio`, the rest into `Video`. A type the post
-  /// has one file of gets `<name>.<ext>`; several share a `<name>` folder
-  /// inside the type folder.
+  /// Files a post's downloads straight into the type folders (no folder per
+  /// post): every image into `Images`, audio into `Audio`, the rest into
+  /// `Video`. One file is `<name>.<ext>`; several are numbered in the post's
+  /// order: `<name> 1.jpg`, `<name> 2.mp4`, ...
   Future<void> _completeGallery(DownloadTask task, String root, List<File> saved) async {
     final moved = <String>[];
-    final byFolder = <MediaFolder, List<File>>{};
-    for (final f in saved) {
-      byFolder.putIfAbsent(MediaFolder.forExtension(p.extension(f.path)), () => []).add(f);
-    }
     try {
-      for (final MapEntry(key: type, value: files) in byFolder.entries) {
-        final dir = storage.dirFor(type) ?? root;
-        if (files.length == 1) {
-          final ext = p.extension(files.first.path);
-          var name = task.fileBaseName;
-          for (var i = 2; File(p.join(dir, '$name$ext')).existsSync(); i++) {
-            name = '${task.fileBaseName} ($i)';
-          }
-          moved.add(await _move(files.first, p.join(dir, '$name$ext')));
-          continue;
-        }
-        var folder = p.join(dir, task.fileBaseName);
-        for (var i = 2; Directory(folder).existsSync() || File(folder).existsSync(); i++) {
-          folder = p.join(dir, '${task.fileBaseName} ($i)');
-        }
-        Directory(folder).createSync(recursive: true);
-        for (final f in files) {
-          moved.add(await _move(f, p.join(folder, p.basename(f.path))));
-        }
+      for (final (i, f) in saved.indexed) {
+        moved.add(await _move(f, postFilePath(
+          dir: storage.dirFor(MediaFolder.forExtension(p.extension(f.path))) ?? root,
+          baseName: task.fileBaseName,
+          extension: p.extension(f.path),
+          number: saved.length > 1 ? i + 1 : null,
+        )));
       }
     } catch (e) {
       if (moved.isEmpty) {
@@ -816,3 +800,15 @@ String? imageExtensionFor(String? mime) => switch (mime?.toLowerCase()) {
       'image/jxl' => 'jxl',
       _ => null,
     };
+
+/// Where a file of a post is saved: `<dir>/<baseName>[ <number>]<extension>`,
+/// with " (2)", " (3)", ... added when that name is taken.
+@visibleForTesting
+String postFilePath({required String dir, required String baseName, required String extension, int? number}) {
+  final base = number == null ? baseName : '$baseName $number';
+  var name = base;
+  for (var i = 2; File(p.join(dir, '$name$extension')).existsSync(); i++) {
+    name = '$base ($i)';
+  }
+  return p.join(dir, '$name$extension');
+}

@@ -93,6 +93,8 @@ class _HomeShellState extends State<HomeShell> {
         showSnack(context, "Couldn't check for updates", kind: ToastKind.error);
       case UpdateState.offline:
         _showOffline();
+      // An available update shows on Home and Settings; an unreleased build
+      // is only mentioned when the user checks (Check for Updates, What's new).
       default:
         break;
     }

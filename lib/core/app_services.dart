@@ -11,6 +11,7 @@ import '../services/fetch_service.dart';
 import '../services/history_store.dart';
 import '../services/sites_service.dart';
 import '../services/storage_service.dart';
+import '../services/app_updater.dart';
 import '../services/update_service.dart';
 import '../services/web_session.dart';
 import '../services/youtube_client.dart';
@@ -97,6 +98,9 @@ class AppServices {
   /// gallery-dl: posts, galleries and images.
   final GalleryService gallery;
   final UpdateService updates = UpdateService();
+
+  /// Downloads and installs FetchNet updates in the app.
+  late final AppUpdater updater = AppUpdater(updates);
   final ValueNotifier<ThemeMode> themeMode;
 
   /// Settings → Show animations: the animated page icons play, or stay still.

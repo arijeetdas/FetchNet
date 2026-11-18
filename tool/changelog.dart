@@ -4,13 +4,11 @@
 //       pubspec.yaml's version was bumped: file the notes under
 //       "## 🚧 Unreleased" in CHANGELOG.md as that version (the commit
 //       subjects since the last bump when there are none), then sync.
-//   dart run tool/changelog.dart sync [--version 1.2.0+4]
-//       Regenerate from CHANGELOG.md:
-//       - assets/whats_new.json: only the notes of the version in
-//         pubspec.yaml (its own section, or the Unreleased notes before the
-//         version-bump commit files them). The app's one-time "What's new"
-//         popup reads it; nothing else of the changelog ships in the app.
-//       - the website's src/config/changelog.json (every release).
+//   dart run tool/changelog.dart sync
+//       Regenerate the website's src/config/changelog.json (every release)
+//       from CHANGELOG.md. The website publishes it at /changelog.json and in
+//       /update-manifest.json, where the app reads its What's new notes (the
+//       app ships no changelog).
 //   dart run tool/changelog.dart check
 //       Fail when the pubspec version has no changelog entry.
 //
@@ -25,7 +23,6 @@ import 'changelog_markdown.dart';
 
 const _changelogFile = 'CHANGELOG.md';
 const _websiteJson = 'src/config/changelog.json';
-const _appNotes = 'assets/whats_new.json';
 
 Future<void> main(List<String> args) async {
   final command = args.isEmpty ? 'sync' : args.first;
@@ -34,9 +31,9 @@ Future<void> main(List<String> args) async {
     switch (command) {
       case 'release':
         await _release(versionArg);
-        _sync(versionArg);
+        _sync();
       case 'sync':
-        _sync(versionArg);
+        _sync();
       case 'check':
         _check(versionArg);
       default:
@@ -112,20 +109,9 @@ Future<List<String>> _commitSubjects() async {
   }
 }
 
-void _sync([String? override]) {
-  ChangelogRelease? pending;
-  final releases = ChangelogMarkdown.parse(_markdown(), unreleased: (r) => pending = r);
-  const encoder = JsonEncoder.withIndent('  ');
-
-  // The app: this version's notes only.
-  final v = _pubspecVersion(override);
-  final notes = Changelog(releases, pending: pending).notesFor(v.build, installedVersion: v.version);
-  final empty = {'version': v.version, 'build': v.build, 'sections': <Object>[]};
-  _write(_appNotes, '${encoder.convert(notes?.toJson() ?? empty)}\n');
-  if (notes == null) stdout.writeln('changelog: no notes for v${v.version} (build ${v.build}) yet.');
-
-  // The website: every release.
-  final json = '${encoder.convert(Changelog(releases).toJson())}\n';
+void _sync() {
+  final releases = ChangelogMarkdown.parse(_markdown());
+  final json = '${const JsonEncoder.withIndent('  ').convert(Changelog(releases).toJson())}\n';
   final website = Platform.environment['FETCHNET_WEBSITE'] ?? '../../FetchNet';
   if (Directory('$website/src/config').existsSync()) {
     _write('$website/$_websiteJson', json);

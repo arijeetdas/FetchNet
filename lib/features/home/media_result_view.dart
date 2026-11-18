@@ -1,16 +1,22 @@
-import 'dart:async';
 import 'dart:io';
+import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../core/app_services.dart';
 import '../../core/format.dart';
+import '../../engine/engine.dart';
 import '../../models/media_info.dart';
 import '../../widgets/app_dialog.dart';
 import '../../widgets/brand.dart';
+import '../../widgets/motion/motion_core.dart';
+import 'home_kit.dart';
+import 'media_preview.dart';
 import 'rename_dialog.dart';
 
+/// One video or song: its preview, then the qualities (video), formats
+/// (audio) and thumbnail sizes (YouTube) to pick from, and its tags.
 class MediaResultView extends StatefulWidget {
   const MediaResultView({super.key, required this.info, this.framed = true, this.onQueued});
 
@@ -105,13 +111,15 @@ class _MediaResultViewState extends State<MediaResultView> {
         final header = _MediaHeader(info: widget.info);
         final picker = _OptionPicker(
           kind: kind,
-          hasVideo: video.isNotEmpty,
-          hasAudio: audio.isNotEmpty,
+          videoCount: video.length,
+          audioCount: audio.length,
           showThumbnails: showThumbnails,
           thumbnailsLoading: showThumbnails && _thumbnailOptions == null,
+          thumbnailCount: _thumbnailOptions?.length,
           options: options,
           selected: selected,
           ffmpegMissing: !ffmpeg && kind != MediaKind.thumbnail,
+          canInstallFfmpeg: services.engine.canInstallComponents && status.state == EngineState.ready,
           tags: showTags ? widget.info.tags : null,
           onKind: (k) => setState(() {
             _kind = k;
@@ -123,45 +131,28 @@ class _MediaResultViewState extends State<MediaResultView> {
 
         return LayoutBuilder(builder: (context, c) {
           final twoColumn = c.maxWidth >= 820;
-          if (!widget.framed) {
-            return twoColumn
-                ? Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Expanded(flex: 5, child: header),
-                      const SizedBox(width: 24),
-                      Expanded(flex: 6, child: picker),
-                    ],
-                  )
-                : Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [header, const SizedBox(height: 18), picker],
-                  );
-          }
-          return Card(
-            clipBehavior: Clip.antiAlias,
-            child: Padding(
-              padding: EdgeInsets.all(twoColumn ? 22 : 16),
-              child: twoColumn
-                  ? Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Expanded(flex: 5, child: header),
-                        const SizedBox(width: 24),
-                        Expanded(flex: 6, child: picker),
-                      ],
-                    )
-                  : Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [header, const SizedBox(height: 18), picker],
-                    ),
-            ),
-          );
+          final body = twoColumn
+              ? Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(flex: 5, child: header),
+                    const SizedBox(width: 26),
+                    Expanded(flex: 6, child: picker),
+                  ],
+                )
+              : Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [header, const SizedBox(height: 20), picker],
+                );
+          if (!widget.framed) return body;
+          return HomePanel(highlight: true, padding: EdgeInsets.all(twoColumn ? 22 : 14), child: body);
         });
       },
     );
   }
 }
+
+// ───────────── Preview & details ─────────────
 
 class _MediaHeader extends StatelessWidget {
   const _MediaHeader({required this.info});
@@ -171,113 +162,142 @@ class _MediaHeader extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final scheme = theme.colorScheme;
-    final meta = [
-      if (info.uploader != null) info.uploader!,
-      if (info.viewCount != null) '${formatCount(info.viewCount)} views',
-    ].join(' · ');
+    final cover = info.thumbnail;
+    final heroTag = 'media-cover-${info.url}';
+    final chips = <Widget>[
+      if (info.extractor != null) MetaChip(icon: Icons.public_rounded, text: info.extractor!, strong: true),
+      if (info.uploader != null) MetaChip(icon: Icons.person_rounded, text: info.uploader!),
+      if (info.viewCount != null) MetaChip(icon: Icons.visibility_rounded, text: '${formatCount(info.viewCount)} views'),
+      if (info.duration != null && !info.isLive) MetaChip(icon: Icons.schedule_rounded, text: formatDuration(info.duration)),
+    ];
+
+    final preview = AspectRatio(
+      aspectRatio: 16 / 9,
+      child: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          // A soft glow of the picture itself behind the frame.
+          if (cover != null && homeMotion(context))
+            Positioned(
+              left: 18,
+              right: 18,
+              top: 22,
+              bottom: -16,
+              child: IgnorePointer(
+                child: Opacity(
+                  opacity: Theme.of(context).brightness == Brightness.dark ? 0.55 : 0.4,
+                  child: ImageFiltered(
+                    imageFilter: ui.ImageFilter.blur(sigmaX: 22, sigmaY: 22, tileMode: TileMode.decal),
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(30),
+                      child: Image.network(cover, fit: BoxFit.cover, cacheWidth: 240, errorBuilder: (_, _, _) => const SizedBox()),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          Positioned.fill(
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(22),
+              child: Material(
+                type: MaterialType.transparency,
+                child: InkWell(
+                  onTap: cover == null
+                      ? null
+                      : () => showMediaPreview(
+                            context,
+                            items: [PreviewItem(url: cover, caption: info.title, heroTag: heroTag)],
+                          ),
+                  child: Stack(
+                    fit: StackFit.expand,
+                    children: [
+                      Hero(
+                        tag: heroTag,
+                        child: cover == null
+                            ? const _CoverFallback()
+                            : FadeInNetworkImage(url: cover, fallback: const _CoverFallback()),
+                      ),
+                      const DecoratedBox(
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            begin: Alignment.topCenter,
+                            end: Alignment.bottomCenter,
+                            colors: [Color(0x40000000), Color(0x00000000), Color(0x00000000), Color(0x8A000000)],
+                            stops: [0, 0.28, 0.6, 1],
+                          ),
+                        ),
+                      ),
+                      if (info.isLive)
+                        const Positioned(
+                          left: 12,
+                          top: 12,
+                          child: OverlayPill(text: 'LIVE', icon: Icons.sensors_rounded, color: Color(0xE6E11D48)),
+                        ),
+                      if (cover != null)
+                        const Positioned(right: 12, top: 12, child: OverlayPill(text: 'View', icon: Icons.zoom_out_map_rounded)),
+                      if (info.duration != null && !info.isLive)
+                        Positioned(right: 12, bottom: 12, child: OverlayPill(text: formatDuration(info.duration))),
+                      if (info.isYouTubeMusic)
+                        const Positioned(left: 12, bottom: 12, child: OverlayPill(text: 'Music', icon: Icons.music_note_rounded)),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        ClipRRect(
-          borderRadius: BorderRadius.circular(18),
-          child: AspectRatio(
-            aspectRatio: 16 / 9,
-            child: Stack(
-              fit: StackFit.expand,
-              children: [
-                Container(
-                  decoration: const BoxDecoration(gradient: AppColors.brandGradient),
-                  child: const Icon(Icons.play_circle_outline_rounded, color: Colors.white70, size: 56),
-                ),
-                if (info.thumbnail != null)
-                  Image.network(
-                    info.thumbnail!,
-                    fit: BoxFit.cover,
-                    errorBuilder: (_, _, _) => const SizedBox.shrink(),
-                    frameBuilder: (context, child, frame, sync) => AnimatedOpacity(
-                      opacity: frame == null ? 0 : 1,
-                      duration: const Duration(milliseconds: 250),
-                      child: child,
-                    ),
-                  ),
-                if (info.duration != null)
-                  Positioned(
-                    right: 10,
-                    bottom: 10,
-                    child: _Pill(text: formatDuration(info.duration), dark: true),
-                  ),
-                if (info.isLive)
-                  const Positioned(left: 10, top: 10, child: _Pill(text: 'LIVE', color: Colors.red)),
-              ],
-            ),
+        EntranceMotion(child: preview),
+        const SizedBox(height: 16),
+        EntranceMotion(
+          index: 1,
+          child: Text(
+            info.title,
+            style: theme.textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w800, height: 1.25),
+            maxLines: 3,
+            overflow: TextOverflow.ellipsis,
           ),
         ),
-        const SizedBox(height: 14),
-        Text(info.title, style: theme.textTheme.titleLarge, maxLines: 3, overflow: TextOverflow.ellipsis),
-        if (meta.isNotEmpty) ...[
-          const SizedBox(height: 4),
-          Text(meta, style: theme.textTheme.bodyMedium?.copyWith(color: scheme.onSurfaceVariant)),
-        ],
-        if (info.extractor != null) ...[
+        if (chips.isNotEmpty) ...[
           const SizedBox(height: 10),
-          Align(
-            alignment: Alignment.centerLeft,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-              decoration: BoxDecoration(
-                color: scheme.secondaryContainer,
-                borderRadius: BorderRadius.circular(999),
-              ),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(Icons.public_rounded, size: 14, color: scheme.onSecondaryContainer),
-                  const SizedBox(width: 6),
-                  Text(
-                    info.extractor!,
-                    style: theme.textTheme.labelMedium?.copyWith(color: scheme.onSecondaryContainer, fontWeight: FontWeight.w700),
-                  ),
-                ],
-              ),
-            ),
-          ),
+          EntranceMotion(index: 2, child: Wrap(spacing: 6, runSpacing: 6, children: chips)),
         ],
       ],
     );
   }
 }
 
-class _Pill extends StatelessWidget {
-  const _Pill({required this.text, this.dark = false, this.color});
-
-  final String text;
-  final bool dark;
-  final Color? color;
+class _CoverFallback extends StatelessWidget {
+  const _CoverFallback();
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-      decoration: BoxDecoration(
-        color: color ?? Colors.black.withValues(alpha: 0.72),
-        borderRadius: BorderRadius.circular(8),
-      ),
-      child: Text(text, style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w800)),
+    return const DecoratedBox(
+      decoration: BoxDecoration(gradient: tileGradient),
+      child: Center(child: Icon(Icons.play_circle_outline_rounded, color: Colors.white70, size: 56)),
     );
   }
 }
 
+// ───────────── Picker ─────────────
+
 class _OptionPicker extends StatelessWidget {
   const _OptionPicker({
     required this.kind,
-    required this.hasVideo,
-    required this.hasAudio,
+    required this.videoCount,
+    required this.audioCount,
     required this.showThumbnails,
     required this.thumbnailsLoading,
+    required this.thumbnailCount,
     required this.options,
     required this.selected,
     required this.ffmpegMissing,
+    required this.canInstallFfmpeg,
     required this.tags,
     required this.onKind,
     required this.onSelect,
@@ -285,16 +305,18 @@ class _OptionPicker extends StatelessWidget {
   });
 
   final MediaKind kind;
-  final bool hasVideo;
-  final bool hasAudio;
+  final int videoCount;
+  final int audioCount;
   final bool showThumbnails;
   final bool thumbnailsLoading;
+  final int? thumbnailCount;
 
   /// YouTube tags to list under the Download button, or `null` to hide them.
   final List<String>? tags;
   final List<DownloadOption> options;
   final DownloadOption? selected;
   final bool ffmpegMissing;
+  final bool canInstallFfmpeg;
   final ValueChanged<MediaKind> onKind;
   final ValueChanged<DownloadOption> onSelect;
   final VoidCallback? onDownload;
@@ -303,131 +325,483 @@ class _OptionPicker extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
+    final sel = selected;
+
+    final Widget grid;
+    if (options.isEmpty && kind == MediaKind.thumbnail && thumbnailsLoading) {
+      grid = const Padding(
+        key: ValueKey('thumbs-loading'),
+        padding: EdgeInsets.symmetric(vertical: 28),
+        child: Center(child: EnergyLoader(size: 40)),
+      );
+    } else if (options.isEmpty) {
+      grid = Padding(
+        key: ValueKey('empty-$kind'),
+        padding: const EdgeInsets.symmetric(vertical: 18),
+        child: Text(
+          kind == MediaKind.thumbnail
+              ? 'No thumbnails are available for this video.'
+              : 'No ${kind.name} formats are available for this link.',
+          textAlign: TextAlign.center,
+          style: theme.textTheme.bodyMedium?.copyWith(color: scheme.onSurfaceVariant),
+        ),
+      );
+    } else {
+      grid = _OptionGrid(
+        key: ValueKey('grid-$kind'),
+        kind: kind,
+        options: options,
+        selected: sel,
+        onSelect: onSelect,
+      );
+    }
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        SegmentedButton<MediaKind>(
+        SlidingSegments<MediaKind>(
           segments: [
-            ButtonSegment(
-              value: MediaKind.video,
-              icon: const Icon(Icons.movie_rounded),
-              label: const Text('Video'),
-              enabled: hasVideo,
-            ),
-            ButtonSegment(
-              value: MediaKind.audio,
-              icon: const Icon(Icons.music_note_rounded),
-              label: const Text('Audio'),
-              enabled: hasAudio,
-            ),
+            Segment(value: MediaKind.video, icon: Icons.movie_rounded, label: 'Video', count: videoCount, enabled: videoCount > 0),
+            Segment(value: MediaKind.audio, icon: Icons.music_note_rounded, label: 'Audio', count: audioCount, enabled: audioCount > 0),
             if (showThumbnails)
-              const ButtonSegment(
-                value: MediaKind.thumbnail,
-                icon: Icon(Icons.image_rounded),
-                label: FittedBox(fit: BoxFit.scaleDown, child: Text('Thumbnail')),
+              Segment(value: MediaKind.thumbnail, icon: Icons.image_rounded, label: 'Thumbnail', count: thumbnailCount),
+          ],
+          selected: kind,
+          onChanged: onKind,
+        ),
+        const SizedBox(height: 16),
+        Row(
+          children: [
+            Expanded(
+              child: AnimatedSwitcher(
+                duration: homeDuration(context, const Duration(milliseconds: 220)),
+                layoutBuilder: (current, previous) => Stack(alignment: Alignment.centerLeft, children: [...previous, ?current]),
+                child: Text(
+                  switch (kind) {
+                    MediaKind.video => 'Pick a quality',
+                    MediaKind.audio => 'Pick a format',
+                    MediaKind.thumbnail => 'Pick a size',
+                    MediaKind.image || MediaKind.post => 'Pick files',
+                  },
+                  key: ValueKey(kind),
+                  style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w800),
+                ),
+              ),
+            ),
+            if (options.length > 1)
+              Text(
+                '${options.length} options',
+                style: theme.textTheme.labelMedium?.copyWith(color: scheme.onSurfaceVariant),
               ),
           ],
-          selected: {kind},
-          showSelectedIcon: false,
-          onSelectionChanged: (s) => onKind(s.first),
         ),
-        const SizedBox(height: 14),
-        Text(
-          switch (kind) {
-            MediaKind.video => 'Choose a quality',
-            MediaKind.audio => 'Choose a format',
-            MediaKind.thumbnail => 'Choose a size',
-            MediaKind.image || MediaKind.post => 'Choose files',
-          },
-          style: theme.textTheme.labelLarge?.copyWith(color: scheme.onSurfaceVariant),
-        ),
-        const SizedBox(height: 8),
-        if (options.isEmpty && kind == MediaKind.thumbnail && thumbnailsLoading)
-          const Padding(
-            padding: EdgeInsets.symmetric(vertical: 20),
-            child: Center(child: EnergyLoader(size: 36)),
-          )
-        else if (options.isEmpty)
-          Padding(
-            padding: const EdgeInsets.symmetric(vertical: 16),
-            child: Text(
-              kind == MediaKind.thumbnail
-                  ? 'No thumbnails are available for this video.'
-                  : 'No ${kind.name} formats are available for this link.',
-              style: theme.textTheme.bodyMedium?.copyWith(color: scheme.onSurfaceVariant),
-            ),
-          )
-        else
-          ConstrainedBox(
-            constraints: const BoxConstraints(maxHeight: 360),
-            child: ListView.separated(
-              shrinkWrap: true,
-              itemCount: options.length,
-              separatorBuilder: (_, _) => const SizedBox(height: 8),
-              itemBuilder: (context, i) => _OptionTile(
-                option: options[i],
-                selected: identical(options[i], selected),
-                onTap: () => onSelect(options[i]),
+        const SizedBox(height: 10),
+        AnimatedSize(
+          duration: homeDuration(context, const Duration(milliseconds: 320)),
+          curve: Curves.easeOutCubic,
+          alignment: Alignment.topCenter,
+          child: AnimatedSwitcher(
+            duration: homeDuration(context, const Duration(milliseconds: 260)),
+            switchInCurve: Curves.easeOutCubic,
+            transitionBuilder: (child, a) => FadeTransition(
+              opacity: a,
+              child: SlideTransition(
+                position: Tween(begin: const Offset(0.04, 0), end: Offset.zero).animate(a),
+                child: child,
               ),
             ),
+            layoutBuilder: (current, previous) => Stack(alignment: Alignment.topCenter, children: [...previous, ?current]),
+            child: grid,
           ),
+        ),
         if (ffmpegMissing) ...[
-          const SizedBox(height: 10),
-          Text(
-            'Install FFmpeg (Home banner or Settings) for HD qualities and MP3.',
-            style: theme.textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
-          ),
+          const SizedBox(height: 12),
+          _FfmpegHint(canInstall: canInstallFfmpeg),
         ],
         const SizedBox(height: 16),
         GradientButton(
-          label: selected == null
+          label: sel == null
               ? 'Download'
-              : 'Download ${selected!.label}${selected!.sizeBytes != null ? '  ·  ~${formatBytes(selected!.sizeBytes)}' : ''}',
+              : 'Download ${sel.label}${sel.sizeBytes != null ? '  ·  ~${formatBytes(sel.sizeBytes)}' : ''}',
           icon: Icons.download_rounded,
           expand: true,
+          height: 56,
           onPressed: onDownload,
         ),
         if (tags != null) ...[
-          const SizedBox(height: 14),
-          _TagsBox(tags: tags!),
-          const SizedBox(height: 10),
-          OutlinedButton.icon(
-            onPressed: tags!.isEmpty
-                ? null
-                : () async {
-                    await Clipboard.setData(ClipboardData(text: tags!.join(', ')));
-                    if (context.mounted) {
-                      showSnack(context, '${tags!.length} tags copied', kind: ToastKind.success);
-                    }
-                  },
-            icon: const Icon(Icons.copy_all_rounded),
-            label: const Text('Copy all tags'),
-            style: OutlinedButton.styleFrom(
-              minimumSize: const Size(double.infinity, 50),
-              side: BorderSide(color: scheme.primary.withValues(alpha: 0.35)),
-            ),
-          ),
+          const SizedBox(height: 16),
+          _TagsCard(tags: tags!),
         ],
       ],
     );
   }
 }
 
-class _TagsBox extends StatelessWidget {
-  const _TagsBox({required this.tags});
+/// The choices as cards, two or three across.
+class _OptionGrid extends StatelessWidget {
+  const _OptionGrid({super.key, required this.kind, required this.options, required this.selected, required this.onSelect});
 
-  final List<String> tags;
+  final MediaKind kind;
+  final List<DownloadOption> options;
+  final DownloadOption? selected;
+  final ValueChanged<DownloadOption> onSelect;
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(builder: (context, c) {
+      const gap = 10.0;
+      final columns = kind == MediaKind.thumbnail
+          ? (c.maxWidth >= 560 ? 3 : 2)
+          : (c.maxWidth >= 600 ? 4 : c.maxWidth >= 380 ? 3 : 2);
+      final width = (c.maxWidth - gap * (columns - 1)) / columns;
+      return Wrap(
+        spacing: gap,
+        runSpacing: gap,
+        children: [
+          for (final (i, o) in options.indexed)
+            SizedBox(
+              width: width,
+              child: EntranceMotion(
+                index: i,
+                step: const Duration(milliseconds: 35),
+                offset: 12,
+                child: kind == MediaKind.thumbnail
+                    ? _ThumbnailCard(option: o, selected: identical(o, selected), onTap: () => onSelect(o))
+                    : _FormatCard(option: o, kind: kind, selected: identical(o, selected), onTap: () => onSelect(o)),
+              ),
+            ),
+        ],
+      );
+    });
+  }
+}
+
+/// The frame shared by option cards: a gradient edge and a check when
+/// selected.
+class _SelectableFrame extends StatelessWidget {
+  const _SelectableFrame({required this.selected, required this.onTap, required this.child, this.onLongPress, this.label});
+
+  final bool selected;
+  final VoidCallback onTap;
+  final VoidCallback? onLongPress;
+  final Widget child;
+  final String? label;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final d = homeDuration(context, const Duration(milliseconds: 240));
+    return Semantics(
+      selected: selected,
+      button: true,
+      label: label,
+      child: PressableScale(
+        child: AnimatedContainer(
+          duration: d,
+          curve: Curves.easeOutCubic,
+          padding: EdgeInsets.all(selected ? 2 : 1),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(20),
+            gradient: selected ? AppColors.brandGradient : null,
+            color: selected ? null : scheme.outlineVariant.withValues(alpha: 0.45),
+            boxShadow: selected
+                ? [BoxShadow(color: AppColors.violetBright.withValues(alpha: 0.28), blurRadius: 18, offset: const Offset(0, 7))]
+                : null,
+          ),
+          child: Material(
+            color: selected
+                ? Color.alphaBlend(scheme.primaryContainer.withValues(alpha: 0.5), scheme.surfaceContainerLowest)
+                : scheme.surfaceContainerLowest,
+            borderRadius: BorderRadius.circular(selected ? 18 : 19),
+            clipBehavior: Clip.antiAlias,
+            child: InkWell(
+              onTap: onTap,
+              onLongPress: onLongPress,
+              child: Stack(
+                children: [
+                  child,
+                  Positioned(
+                    right: 8,
+                    top: 8,
+                    child: AnimatedScale(
+                      scale: selected ? 1 : 0,
+                      duration: d,
+                      curve: springCurve,
+                      child: Container(
+                        width: 22,
+                        height: 22,
+                        decoration: const BoxDecoration(gradient: AppColors.brandGradient, shape: BoxShape.circle),
+                        child: const Icon(Icons.check_rounded, size: 15, color: Colors.white),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// A video quality or an audio format.
+class _FormatCard extends StatelessWidget {
+  const _FormatCard({required this.option, required this.kind, required this.selected, required this.onTap});
+
+  final DownloadOption option;
+  final MediaKind kind;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    final audio = kind == MediaKind.audio;
+    return _SelectableFrame(
+      selected: selected,
+      onTap: onTap,
+      label: [option.label, ?option.detail, if (option.sizeBytes != null) formatBytes(option.sizeBytes)].join(', '),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(12, 12, 12, 11),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(
+                  audio ? Icons.graphic_eq_rounded : Icons.hd_rounded,
+                  size: 18,
+                  color: selected ? scheme.primary : scheme.onSurfaceVariant,
+                ),
+                if (option.badge != null) ...[const SizedBox(width: 6), GradientBadge(option.badge!)],
+                const SizedBox(width: 26),
+              ],
+            ),
+            const SizedBox(height: 8),
+            FittedBox(
+              fit: BoxFit.scaleDown,
+              alignment: Alignment.centerLeft,
+              child: Text(
+                option.label,
+                maxLines: 1,
+                style: theme.textTheme.titleLarge?.copyWith(
+                  fontWeight: FontWeight.w900,
+                  letterSpacing: -0.5,
+                  color: selected ? scheme.primary : scheme.onSurface,
+                ),
+              ),
+            ),
+            if (option.detail != null)
+              Text(
+                option.detail!,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: theme.textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant, height: 1.3),
+              ),
+            const SizedBox(height: 6),
+            Text(
+              option.sizeBytes == null ? 'Size unknown' : '~${formatBytes(option.sizeBytes)}',
+              style: theme.textTheme.labelMedium?.copyWith(
+                fontWeight: FontWeight.w800,
+                color: option.sizeBytes == null ? scheme.outline : scheme.onSurface,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// A YouTube thumbnail size, with the picture itself.
+class _ThumbnailCard extends StatelessWidget {
+  const _ThumbnailCard({required this.option, required this.selected, required this.onTap});
+
+  final DownloadOption option;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    final url = option.directUrl;
+    void preview() {
+      if (url != null) showMediaPreview(context, items: [PreviewItem(url: url, caption: '${option.label} · ${option.detail ?? ''}')]);
+    }
+
+    return _SelectableFrame(
+      selected: selected,
+      onTap: onTap,
+      onLongPress: preview,
+      label: [option.label, ?option.detail].join(', '),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          AspectRatio(
+            aspectRatio: 16 / 9,
+            child: Stack(
+              fit: StackFit.expand,
+              children: [
+                if (url != null)
+                  FadeInNetworkImage(
+                    url: url,
+                    cacheWidth: 360,
+                    fallback: ColoredBox(color: scheme.surfaceContainerHighest, child: Icon(Icons.image_rounded, color: scheme.outline)),
+                  )
+                else
+                  ColoredBox(color: scheme.surfaceContainerHighest),
+                if (url != null)
+                  Positioned(
+                    left: 6,
+                    bottom: 6,
+                    child: Material(
+                      color: Colors.black.withValues(alpha: 0.55),
+                      shape: const CircleBorder(),
+                      clipBehavior: Clip.antiAlias,
+                      child: InkWell(
+                        onTap: preview,
+                        child: const Padding(
+                          padding: EdgeInsets.all(5),
+                          child: Icon(Icons.zoom_in_rounded, size: 16, color: Colors.white),
+                        ),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(10, 8, 10, 10),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Flexible(
+                      child: Text(
+                        option.label,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: theme.textTheme.labelLarge?.copyWith(
+                          fontWeight: FontWeight.w900,
+                          color: selected ? scheme.primary : scheme.onSurface,
+                        ),
+                      ),
+                    ),
+                    if (option.badge != null) ...[const SizedBox(width: 6), GradientBadge(option.badge!)],
+                  ],
+                ),
+                Text(
+                  [?option.detail, if (option.sizeBytes != null) formatBytes(option.sizeBytes)].join(' · '),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: theme.textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// "HD and MP3 need FFmpeg", with a one-tap install where FetchNet can.
+class _FfmpegHint extends StatefulWidget {
+  const _FfmpegHint({required this.canInstall});
+
+  final bool canInstall;
+
+  @override
+  State<_FfmpegHint> createState() => _FfmpegHintState();
+}
+
+class _FfmpegHintState extends State<_FfmpegHint> {
+  bool _busy = false;
+
+  Future<void> _install() async {
+    final services = AppScope.of(context);
+    setState(() => _busy = true);
+    try {
+      await services.engine.installComponent(EngineComponent.ffmpeg);
+      if (mounted) showSnack(context, 'FFmpeg installed: HD and MP3 unlocked', kind: ToastKind.success);
+    } catch (e) {
+      if (mounted) showSnack(context, 'FFmpeg install failed: $e', kind: ToastKind.error);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
     return Container(
-      padding: const EdgeInsets.fromLTRB(14, 12, 14, 14),
+      padding: const EdgeInsets.fromLTRB(12, 10, 10, 10),
       decoration: BoxDecoration(
-        color: scheme.surfaceContainerLowest,
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: scheme.outlineVariant.withValues(alpha: 0.5)),
+        color: scheme.tertiaryContainer.withValues(alpha: 0.45),
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.auto_awesome_rounded, size: 20, color: scheme.onTertiaryContainer),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              widget.canInstall
+                  ? 'HD qualities and MP3 need FFmpeg.'
+                  : 'Install FFmpeg (Settings → Engines) for HD qualities and MP3.',
+              style: theme.textTheme.bodySmall?.copyWith(color: scheme.onTertiaryContainer, height: 1.35),
+            ),
+          ),
+          if (widget.canInstall)
+            TextButton.icon(
+              onPressed: _busy ? null : _install,
+              icon: _busy ? const EnergyLoader(size: 16) : const Icon(Icons.download_rounded, size: 18),
+              label: const Text('Install'),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+// ───────────── Tags ─────────────
+
+class _TagsCard extends StatefulWidget {
+  const _TagsCard({required this.tags});
+
+  final List<String> tags;
+
+  @override
+  State<_TagsCard> createState() => _TagsCardState();
+}
+
+class _TagsCardState extends State<_TagsCard> {
+  static const _preview = 14;
+  bool _all = false;
+
+  Future<void> _copy(String text, String message) async {
+    await Clipboard.setData(ClipboardData(text: text));
+    if (mounted) showSnack(context, message, kind: ToastKind.success);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    final tags = widget.tags;
+    final shown = _all ? tags : tags.take(_preview).toList();
+    final hidden = tags.length - shown.length;
+    return Container(
+      padding: const EdgeInsets.fromLTRB(14, 12, 10, 14),
+      decoration: BoxDecoration(
+        color: scheme.surfaceContainerLowest.withValues(alpha: 0.75),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: scheme.outlineVariant.withValues(alpha: 0.4)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -436,46 +810,94 @@ class _TagsBox extends StatelessWidget {
             children: [
               Icon(Icons.sell_rounded, size: 18, color: scheme.primary),
               const SizedBox(width: 8),
-              Text(
-                tags.isEmpty ? 'Tags' : 'Tags · ${tags.length}',
-                style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w800),
-              ),
-            ],
-          ),
-          const SizedBox(height: 10),
-          if (tags.isEmpty)
-            Text(
-              'This video has no tags.',
-              style: theme.textTheme.bodyMedium?.copyWith(color: scheme.onSurfaceVariant),
-            )
-          else
-            ConstrainedBox(
-              constraints: const BoxConstraints(maxHeight: 200),
-              child: SingleChildScrollView(
-                child: Wrap(
-                  spacing: 6,
-                  runSpacing: 6,
-                  children: [
-                    for (final t in tags)
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                        decoration: BoxDecoration(
-                          color: scheme.secondaryContainer.withValues(alpha: 0.7),
-                          borderRadius: BorderRadius.circular(999),
-                        ),
-                        child: Text(
-                          t,
-                          style: theme.textTheme.labelMedium?.copyWith(
-                            color: scheme.onSecondaryContainer,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                      ),
-                  ],
+              Expanded(
+                child: Text(
+                  tags.isEmpty ? 'Tags' : 'Tags · ${tags.length}',
+                  style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w800),
                 ),
               ),
+              if (tags.isNotEmpty)
+                TextButton.icon(
+                  onPressed: () => _copy(tags.join(', '), '${tags.length} tags copied'),
+                  icon: const Icon(Icons.copy_all_rounded, size: 18),
+                  label: const Text('Copy all'),
+                ),
+            ],
+          ),
+          if (tags.isEmpty)
+            Padding(
+              padding: const EdgeInsets.only(top: 6),
+              child: Text(
+                'This video has no tags.',
+                style: theme.textTheme.bodyMedium?.copyWith(color: scheme.onSurfaceVariant),
+              ),
+            )
+          else ...[
+            Padding(
+              padding: const EdgeInsets.only(bottom: 8, right: 4),
+              child: Text(
+                'Tap a tag to copy it.',
+                style: theme.textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
+              ),
             ),
+            AnimatedSize(
+              duration: homeDuration(context, const Duration(milliseconds: 320)),
+              curve: Curves.easeOutCubic,
+              alignment: Alignment.topCenter,
+              child: Wrap(
+                spacing: 6,
+                runSpacing: 6,
+                children: [
+                  for (final (i, t) in shown.indexed)
+                    EntranceMotion(
+                      key: ValueKey('tag-$t'),
+                      index: i >= _preview ? i - _preview : i,
+                      step: const Duration(milliseconds: 20),
+                      offset: 6,
+                      child: _TagChip(tag: t, onTap: () => _copy(t, 'Copied “$t”')),
+                    ),
+                  if (hidden > 0 || _all && tags.length > _preview)
+                    ActionChip(
+                      avatar: Icon(_all ? Icons.expand_less_rounded : Icons.expand_more_rounded, size: 18),
+                      label: Text(_all ? 'Show less' : '+$hidden more'),
+                      onPressed: () => setState(() => _all = !_all),
+                      shape: const StadiumBorder(),
+                    ),
+                ],
+              ),
+            ),
+          ],
         ],
+      ),
+    );
+  }
+}
+
+class _TagChip extends StatelessWidget {
+  const _TagChip({required this.tag, required this.onTap});
+
+  final String tag;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    return PressableScale(
+      child: Material(
+        color: scheme.secondaryContainer.withValues(alpha: 0.7),
+        borderRadius: BorderRadius.circular(999),
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          onTap: onTap,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 6),
+            child: Text(
+              '#$tag',
+              style: theme.textTheme.labelMedium?.copyWith(color: scheme.onSecondaryContainer, fontWeight: FontWeight.w700),
+            ),
+          ),
+        ),
       ),
     );
   }
@@ -520,83 +942,5 @@ Future<List<DownloadOption>> probeThumbnails(MediaInfo info) async {
     return options;
   } finally {
     http.close(force: true);
-  }
-}
-
-class _OptionTile extends StatelessWidget {
-  const _OptionTile({required this.option, required this.selected, required this.onTap});
-
-  final DownloadOption option;
-  final bool selected;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final scheme = theme.colorScheme;
-    return AnimatedContainer(
-      duration: const Duration(milliseconds: 180),
-      decoration: BoxDecoration(
-        color: selected ? scheme.primaryContainer.withValues(alpha: 0.65) : scheme.surfaceContainerLowest,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(
-          color: selected ? scheme.primary : scheme.outlineVariant.withValues(alpha: 0.5),
-          width: selected ? 1.6 : 1,
-        ),
-      ),
-      child: Material(
-        type: MaterialType.transparency,
-        child: InkWell(
-          borderRadius: BorderRadius.circular(16),
-          onTap: onTap,
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-            child: Row(
-              children: [
-                Icon(
-                  selected ? Icons.radio_button_checked_rounded : Icons.radio_button_off_rounded,
-                  color: selected ? scheme.primary : scheme.outline,
-                  size: 22,
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          Text(option.label, style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w800)),
-                          if (option.badge != null) ...[
-                            const SizedBox(width: 8),
-                            Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
-                              decoration: BoxDecoration(
-                                gradient: AppColors.brandGradient,
-                                borderRadius: BorderRadius.circular(6),
-                              ),
-                              child: Text(
-                                option.badge!,
-                                style: const TextStyle(color: Colors.white, fontSize: 10.5, fontWeight: FontWeight.w900),
-                              ),
-                            ),
-                          ],
-                        ],
-                      ),
-                      if (option.detail != null)
-                        Text(option.detail!, style: theme.textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant)),
-                    ],
-                  ),
-                ),
-                if (option.sizeBytes != null)
-                  Text(
-                    '~${formatBytes(option.sizeBytes)}',
-                    style: theme.textTheme.labelLarge?.copyWith(color: scheme.onSurfaceVariant),
-                  ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
   }
 }

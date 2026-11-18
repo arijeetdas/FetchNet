@@ -272,7 +272,7 @@ State lives in a few `ChangeNotifier` services exposed through an `InheritedWidg
 <details>
 <summary><b>Files where users expect them</b></summary>
 
-Downloads go to the public `Download/FetchNet` folder (created on first run), sorted into `Images`, `Audio` and `Video` folders by file type; files saved before the type folders existed stay where they are and still show in Downloads. Each finished file is registered with Android's MediaScanner, so photos and videos show up in Gallery / Photos and audio in music and file-manager apps. A post's files are sorted by type too, with a folder named after the post wherever it adds more than one file. yt-dlp's partial files stay in app-private temp storage until they're complete.
+Downloads go to the public `Download/FetchNet` folder (created on first run), sorted into `Images`, `Audio` and `Video` folders by file type; files saved before the type folders existed stay where they are and still show in Downloads. Each finished file is registered with Android's MediaScanner, so photos and videos show up in Gallery / Photos and audio in music and file-manager apps. A post's files are sorted by type too, straight into those folders: several files are numbered after the name you give (`name 1`, `name 2`, …). yt-dlp's partial files stay in app-private temp storage until they're complete.
 </details>
 
 ---

@@ -114,13 +114,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
 
-    return PageFrame(
-      title: 'Settings',
-      leading: const PageGlyph(PageGlyphKind.settings),
-      maxWidth: 760,
-      slivers: [
-        SliverList.list(
-          children: [
+    // Phones: one list. Large screens: the sections in two columns (see the
+    // end of build).
+    final children = <Widget>[
             const UpdateBanner(padding: EdgeInsets.only(top: 8)),
             const Padding(
               padding: EdgeInsets.only(top: 10),
@@ -402,8 +398,46 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 ],
               ),
             ),
-          ],
-        ),
+    ];
+
+    final wide = Breakpoints.isWide(context);
+    return PageFrame(
+      title: 'Settings',
+      leading: const PageGlyph(PageGlyphKind.settings),
+      maxWidth: wide ? 1400 : 760,
+      slivers: [
+        if (!wide)
+          SliverList.list(children: children)
+        else
+          SliverToBoxAdapter(
+            child: LayoutBuilder(
+              builder: (context, c) {
+                // Banner and animation | Appearance, Downloads, YouTube |
+                // Engines, About | footer.
+                assert(children.length == 14, 'Update the column split below');
+                final top = children.sublist(0, 2);
+                final left = children.sublist(2, 8);
+                final right = children.sublist(8, 12);
+                final footer = children.sublist(12);
+                if (c.maxWidth < 900) return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: children);
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    ...top,
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: left)),
+                        const SizedBox(width: 24),
+                        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: right)),
+                      ],
+                    ),
+                    ...footer,
+                  ],
+                );
+              },
+            ),
+          ),
       ],
     );
   }

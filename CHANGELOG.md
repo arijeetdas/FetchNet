@@ -18,6 +18,40 @@ Versions follow `version: <name>+<build>` in `pubspec.yaml`.
 
 ---
 
+## 🚀 v1.2.6 — 2026-11-20
+
+> **Build 6** · A roomier FetchNet on large screens, and Windows closes properly.
+
+### ✨ Highlights
+
+- 🖥️ **Made for large screens**: on desktops, laptops and tablets in landscape, FetchNet uses the room it has. Phones look exactly as before.
+
+### 🛠️ Improved
+
+#### 🏠 Home
+
+- 🧭 On wide windows, Home has **two columns** that fill the window, whatever its size: the link box and results on the left, downloads in progress and **Popular sites** on the right.
+- 🕘 A **Recent downloads** panel shows your latest downloads (as many as fit); tap one to open History.
+- 💡 **How it works** walks through the three steps under the link box, with pictures that grow on bigger screens.
+- 🎬 Video results show the **picture and details next to the qualities** when there's room.
+- 🟪 The four **What FetchNet saves** cards are now all the **same size**, whatever their text, and no longer act like buttons.
+
+#### 🖥️ Large screens
+
+- ⚙️ **Settings** shows its sections in two columns.
+- 🕘 **History** lists downloads in a grid, with the search and the filters on one row.
+- 📥 **Downloads** shows more saved files side by side.
+- 📐 Every page lines up with its title.
+
+### 🐞 Fixed
+
+#### 🪟 Windows
+
+- 🧹 Closing FetchNet now really ends it. Before, it could stay in the background without a window, using a CPU core and keeping its files locked, so installing an update failed.
+- 🔢 After an in-app update, **Installed apps** shows the new version number.
+
+---
+
 ## 🚀 v1.2.5 — 2026-11-19
 
 > **Build 5** · A redesigned Home, and updates that download and install right inside FetchNet.

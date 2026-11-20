@@ -27,6 +27,8 @@ class DownloadsScreen extends StatelessWidget {
         final dir = services.storage.downloadDir;
         return PageFrame(
           title: 'Downloads',
+          // Large screens: saved files three across.
+          maxWidth: Breakpoints.isWide(context) ? 1680 : 980,
           subtitle: dir == null ? null : _friendlyDir(dir),
           leading: const PageGlyph(PageGlyphKind.downloads),
           actions: [

@@ -38,8 +38,10 @@ class _HistoryScreenState extends State<HistoryScreen> {
           return e.title.toLowerCase().contains(q) || e.fileName.toLowerCase().contains(q) || e.url.toLowerCase().contains(q);
         }).toList();
 
+        final wide = Breakpoints.isWide(context);
         return PageFrame(
           title: 'History',
+          maxWidth: wide ? 1680 : 980,
           subtitle: all.isEmpty ? null : '${all.length} download${all.length == 1 ? '' : 's'}',
           leading: const PageGlyph(PageGlyphKind.history),
           actions: [
@@ -70,20 +72,19 @@ class _HistoryScreenState extends State<HistoryScreen> {
               SliverToBoxAdapter(
                 child: Padding(
                   padding: const EdgeInsets.only(top: 8, bottom: 12),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      TextField(
+                  child: Builder(
+                    builder: (context) {
+                      final search = TextField(
                         onChanged: (v) => setState(() => _query = v),
                         decoration: const InputDecoration(
                           hintText: 'Search history',
                           prefixIcon: Icon(Icons.search_rounded),
                           isDense: true,
                         ),
-                      ),
-                      const SizedBox(height: 10),
-                      Wrap(
+                      );
+                      final filters = Wrap(
                         spacing: 8,
+                        runSpacing: wide ? 8 : 0,
                         children: [
                           for (final (label, status) in const [
                             ('All', null),
@@ -97,8 +98,22 @@ class _HistoryScreenState extends State<HistoryScreen> {
                               onSelected: (_) => setState(() => _filter = status),
                             ),
                         ],
-                      ),
-                    ],
+                      );
+                      // Large screens: the search and the filters on one row.
+                      if (wide) {
+                        return Row(
+                          children: [
+                            Expanded(child: search),
+                            const SizedBox(width: 16),
+                            filters,
+                          ],
+                        );
+                      }
+                      return Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [search, const SizedBox(height: 10), filters],
+                      );
+                    },
                   ),
                 ),
               ),
@@ -111,6 +126,21 @@ class _HistoryScreenState extends State<HistoryScreen> {
                       Text(all.isEmpty ? 'No downloads yet' : 'No matches', style: theme.textTheme.titleMedium),
                     ],
                   ),
+                ),
+              )
+            else if (wide)
+              // Large screens: two or three across. Every tile is one row
+              // (title and details are single lines), so one height fits.
+              SliverGrid(
+                gridDelegate: SliverGridDelegateWithMaxCrossAxisExtent(
+                  maxCrossAxisExtent: 560,
+                  mainAxisExtent: 24 + 44 + (MediaQuery.textScalerOf(context).scale(14) - 14) * 2.6,
+                  crossAxisSpacing: 10,
+                  mainAxisSpacing: 10,
+                ),
+                delegate: SliverChildBuilderDelegate(
+                  (context, i) => _HistoryTile(entry: entries[i]),
+                  childCount: entries.length,
                 ),
               )
             else

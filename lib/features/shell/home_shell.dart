@@ -292,10 +292,20 @@ class PageFrame extends StatelessWidget {
             ),
           ),
           for (final s in slivers)
-            SliverPadding(
-              padding: EdgeInsets.symmetric(horizontal: wide ? 28 : 16),
-              sliver: SliverConstrainedCrossAxis(maxExtent: maxWidth, sliver: s),
-            ),
+            if (wide)
+              // Centered, and lined up with the header above (a box of
+              // [maxWidth] with 28 of padding inside).
+              SliverLayoutBuilder(
+                builder: (context, c) {
+                  final inset = (c.crossAxisExtent - maxWidth).clamp(0.0, double.infinity) / 2 + 28;
+                  return SliverPadding(padding: EdgeInsets.symmetric(horizontal: inset), sliver: s);
+                },
+              )
+            else
+              SliverPadding(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                sliver: SliverConstrainedCrossAxis(maxExtent: maxWidth, sliver: s),
+              ),
           SliverToBoxAdapter(child: SizedBox(height: 32 + MediaQuery.paddingOf(context).bottom)),
         ],
       ),

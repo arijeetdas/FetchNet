@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -428,15 +430,18 @@ class _HomeScreenState extends State<HomeScreen> {
     await _fetch(url: url, requestArgs: ['--cookies-from-browser', picked]);
   }
 
-  Widget _phaseView() {
+  /// [fill]: the desktop's main column, where the cards take its full width.
+  Widget _phaseView({bool fill = false, double cardsExtra = 0}) {
     return switch (_phase) {
-      _Phase.idle => Center(
-        key: const ValueKey('idle'),
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 760),
-          child: _Capabilities(onTap: () => _focus.requestFocus()),
-        ),
-      ),
+      _Phase.idle => fill
+          ? _Capabilities(key: const ValueKey('idle'), wide: true, extra: cardsExtra)
+          : Center(
+              key: const ValueKey('idle'),
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 760),
+                child: const _Capabilities(),
+              ),
+            ),
       _Phase.loading => FetchProgressCard(
         key: ValueKey('loading-$_requestToken'),
         host: _hostOf(_lastUrl),
@@ -464,9 +469,239 @@ class _HomeScreenState extends State<HomeScreen> {
     return host.startsWith('www.') ? host.substring(4) : host;
   }
 
+  Widget _linkDock() => LinkDock(
+        controller: _controller,
+        focusNode: _focus,
+        loading: _phase == _Phase.loading,
+        onFetch: () => _fetch(),
+        onPaste: _paste,
+        onClear: _clear,
+      );
+
+  Widget _phaseSwitcher({bool fill = false, double cardsExtra = 0}) => AnimatedSize(
+        duration: homeDuration(context, const Duration(milliseconds: 380)),
+        curve: Curves.easeOutCubic,
+        alignment: Alignment.topCenter,
+        child: AnimatedSwitcher(
+          duration: homeDuration(context, const Duration(milliseconds: 360)),
+          switchInCurve: expoOutCurve,
+          switchOutCurve: Curves.easeIn,
+          transitionBuilder: (child, a) => FadeTransition(
+            opacity: a,
+            child: SlideTransition(
+              position: Tween(begin: const Offset(0, 0.03), end: Offset.zero).animate(a),
+              child: ScaleTransition(scale: Tween(begin: 0.985, end: 1.0).animate(a), child: child),
+            ),
+          ),
+          layoutBuilder: (current, previous) => Stack(alignment: Alignment.topCenter, children: [...previous, ?current]),
+          child: _phaseView(fill: fill, cardsExtra: cardsExtra),
+        ),
+      );
+
+  Widget _hero({bool row = false, double extra = 0}) => AnimatedSize(
+        duration: homeDuration(context, const Duration(milliseconds: 420)),
+        curve: Curves.easeOutCubic,
+        alignment: Alignment.topCenter,
+        child: _phase == _Phase.idle ? _Hero(row: row, extra: extra) : const SizedBox(width: double.infinity),
+      );
+
+  Widget _sites() => SitesPanel(onOpen: _openSite, onBrowser: () => _openBrowserMode());
+
+  // ── Large screens: filling the window ──
+  //
+  // The two columns reach down to the bottom of the window (and to each
+  // other's bottom when the page scrolls). After each layout, the natural
+  // height of each column is measured; what's left of the window goes to
+  // the panels that can use it: the "What FetchNet saves" cards and How it
+  // works in the main column (while idle), Recent downloads in the side
+  // column (more rows fit).
+  final _contentKey = GlobalKey();
+  final _rowKey = GlobalKey();
+  final _mainKey = GlobalKey();
+  final _sideKey = GlobalKey();
+  double _mainFill = 0;
+  double _sideFill = 0;
+
+  /// Height of the window available to the content (padding taken off).
+  double _viewport = 0;
+  bool _measureQueued = false;
+
+  void _queueMeasure() {
+    if (_measureQueued) return;
+    _measureQueued = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _measureQueued = false;
+      _measure();
+    });
+  }
+
+  void _measure() {
+    if (!mounted) return;
+    RenderBox? box(GlobalKey k) {
+      final r = k.currentContext?.findRenderObject();
+      return r is RenderBox && r.hasSize ? r : null;
+    }
+
+    final content = box(_contentKey), row = box(_rowKey), main = box(_mainKey), side = box(_sideKey);
+    if (content == null || row == null || main == null || side == null) return;
+    final rowTop = row.localToGlobal(Offset.zero, ancestor: content).dy;
+    final mainNatural = main.size.height - _mainFill;
+    final sideNatural = side.size.height - _sideFill;
+    final idle = _phase == _Phase.idle;
+    final window = _viewport - rowTop;
+    // How far the idle main column may grow; past that (very tall
+    // windows), the page is centered vertically instead.
+    final reach = idle ? math.min(window, mainNatural + _mainFillCap) : window;
+    final target = math.max(reach, math.max(mainNatural, sideNatural));
+    final mainFill = idle ? math.max(0.0, target - mainNatural) : 0.0;
+    final sideFill = math.max(0.0, target - sideNatural);
+    final slack = math.max(0.0, window - target);
+    if ((mainFill - _mainFill).abs() > 0.5 || (sideFill - _sideFill).abs() > 0.5 || (slack - _slack).abs() > 0.5) {
+      setState(() {
+        _mainFill = mainFill;
+        _sideFill = sideFill;
+        _slack = slack;
+      });
+    }
+  }
+
+  /// The most the idle main column grows (cards, How it works).
+  static const _mainFillCap = 260.0;
+
+  /// Window height left over on very tall screens: split above and below
+  /// the page.
+  double _slack = 0;
+
+  /// Desktop and other large screens (side rail). With room for it, a main
+  /// column (the hero, the link, results) sits next to a side column
+  /// (downloads in progress, sites, recent downloads), both filling the
+  /// window; otherwise it is one centered column, like on a phone.
+  Widget _buildWide(BuildContext context) {
+    return SafeArea(
+      bottom: false,
+      child: LayoutBuilder(
+        builder: (context, c) {
+          const pad = 32.0;
+          const columnGap = 28.0;
+          const top = 28.0;
+          final bottom = 32 + MediaQuery.paddingOf(context).bottom;
+          final room = c.maxWidth - pad * 2;
+          final twoColumns = room >= 1000;
+          final width = twoColumns ? room.clamp(0.0, 1840.0) : room.clamp(0.0, 760.0);
+          final sideWidth = (width * 0.3).clamp(340.0, 460.0);
+          final side = (c.maxWidth - width) / 2;
+          _viewport = c.maxHeight - top - bottom;
+          final List<Widget> children;
+          if (twoColumns) {
+            _queueMeasure();
+            final idle = _phase == _Phase.idle;
+            // The main column's share: the cards grow a little, How it
+            // works takes the rest (its pictures grow).
+            final cardsExtra = idle ? math.min(_mainFill * 0.15, 36.0) : 0.0;
+            final howExtra = idle ? _mainFill - cardsExtra : 0.0;
+            children = [
+              const EntranceMotion(child: _Header()),
+              const SizedBox(height: 18),
+              const StatusDeck(),
+              const SizedBox(height: 4),
+              NotificationListener<SizeChangedLayoutNotification>(
+                onNotification: (_) {
+                  _queueMeasure();
+                  return true;
+                },
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    // Above both columns, so the side column starts level
+                    // with the link box. (It collapses once a link is read;
+                    // the columns move up together.)
+                    SizeChangedLayoutNotifier(child: _hero(row: true)),
+                    Row(
+                      key: _rowKey,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Expanded(
+                          child: SizeChangedLayoutNotifier(
+                            child: Column(
+                              key: _mainKey,
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                              children: [
+                                EntranceMotion(index: 2, child: _linkDock()),
+                                const SizedBox(height: 20),
+                                _phaseSwitcher(fill: true, cardsExtra: cardsExtra),
+                                AnimatedSize(
+                                  duration: homeDuration(context, const Duration(milliseconds: 380)),
+                                  curve: Curves.easeOutCubic,
+                                  alignment: Alignment.topCenter,
+                                  child: idle
+                                      ? Padding(
+                                          padding: const EdgeInsets.only(top: 20),
+                                          child: EntranceMotion(index: 5, child: _HowItWorks(extra: howExtra)),
+                                        )
+                                      : const SizedBox(width: double.infinity),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: columnGap),
+                        SizedBox(
+                          width: sideWidth,
+                          child: SizeChangedLayoutNotifier(
+                            child: Column(
+                              key: _sideKey,
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                              children: [
+                                const _ActiveDownloads(sidebar: true),
+                                EntranceMotion(index: 4, child: _sites()),
+                                const SizedBox(height: 20),
+                                EntranceMotion(index: 6, child: _RecentDownloads(extra: _sideFill)),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ];
+          } else {
+            children = [
+              const EntranceMotion(child: _Header()),
+              const SizedBox(height: 16),
+              const StatusDeck(),
+              _hero(),
+              EntranceMotion(index: 2, child: _linkDock()),
+              const SizedBox(height: 20),
+              _phaseSwitcher(fill: true),
+              const _ActiveDownloads(),
+              const SizedBox(height: 20),
+              EntranceMotion(index: 4, child: _sites()),
+            ];
+          }
+          return CustomScrollView(
+            keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+            slivers: [
+              SliverPadding(
+                padding: twoColumns
+                    ? EdgeInsets.fromLTRB(side, top + _slack / 2, side, bottom + _slack / 2)
+                    : EdgeInsets.fromLTRB(side, top, side, bottom),
+                sliver: SliverToBoxAdapter(
+                  child: Column(key: _contentKey, crossAxisAlignment: CrossAxisAlignment.stretch, children: children),
+                ),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    final wide = Breakpoints.isWide(context);
+    // Phones and other small screens from here on.
+    if (Breakpoints.isWide(context)) return _buildWide(context);
     final idle = _phase == _Phase.idle;
 
     final content = SafeArea(
@@ -475,12 +710,7 @@ class _HomeScreenState extends State<HomeScreen> {
         keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
         slivers: [
           SliverPadding(
-            padding: EdgeInsets.fromLTRB(
-              wide ? 28 : 16,
-              wide ? 24 : 10,
-              wide ? 28 : 16,
-              32 + MediaQuery.paddingOf(context).bottom,
-            ),
+            padding: EdgeInsets.fromLTRB(16, 10, 16, 32 + MediaQuery.paddingOf(context).bottom),
             sliver: SliverConstrainedCrossAxis(
               maxExtent: 1080,
               sliver: SliverList.list(
@@ -551,7 +781,7 @@ class _HomeScreenState extends State<HomeScreen> {
         ],
       ),
     );
-    return wide ? content : AuroraBackground(intensity: 0.6, child: content);
+    return AuroraBackground(intensity: 0.6, child: content);
   }
 }
 
@@ -605,13 +835,54 @@ class _Header extends StatelessWidget {
 }
 
 class _Hero extends StatelessWidget {
-  const _Hero();
+  const _Hero({this.row = false, this.extra = 0});
+
+  /// Desktop main column: the logo next to the words, left-aligned with the
+  /// link box below.
+  final bool row;
+
+  /// Height added in the [row] layout (to fill the window): a larger logo
+  /// and more room below it.
+  final double extra;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
     final wide = Breakpoints.isWide(context);
+    if (row) {
+      return Padding(
+        padding: EdgeInsets.only(top: 6, bottom: 18 + extra * 0.4),
+        child: Row(
+          children: [
+            EntranceMotion(child: LivingLogo(size: 104 + extra * 0.6)),
+            const SizedBox(width: 18),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  EntranceMotion(
+                    index: 1,
+                    child: Text(
+                      'Paste a link. Pick a quality. Done.',
+                      style: theme.textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w900, letterSpacing: -0.6),
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  EntranceMotion(
+                    index: 2,
+                    child: Text(
+                      'Video up to 4K, MP3 and M4A, and every image of a post.',
+                      style: theme.textTheme.bodyLarge?.copyWith(color: scheme.onSurfaceVariant),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      );
+    }
     return Padding(
       padding: const EdgeInsets.only(bottom: 16),
       child: Column(
@@ -646,11 +917,46 @@ class _Hero extends StatelessWidget {
 
 // ───────────── Idle: what FetchNet can save ─────────────
 
+/// Four cards telling what FetchNet saves. They only inform (no taps), and
+/// every card has the same width and height, whatever its text: the height
+/// comes from the text styles (one title line, two body lines), not from
+/// the words in a card.
 class _Capabilities extends StatelessWidget {
-  const _Capabilities({required this.onTap});
+  const _Capabilities({super.key, this.wide = false, this.extra = 0});
 
-  /// Tapping a card puts the cursor in the link field.
-  final VoidCallback onTap;
+  /// Desktop layout: four across from a narrower width.
+  final bool wide;
+
+  /// Height added to every card (desktop, to fill the window): the space
+  /// goes between the icon and the words.
+  final double extra;
+
+  static const _gap = 10.0;
+  static const _padding = 14.0;
+  static const _iconSize = 38.0;
+
+  static TextStyle? _titleStyle(ThemeData theme) => theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w800);
+  static TextStyle? _bodyStyle(ThemeData theme) =>
+      theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant, height: 1.35);
+
+  /// The height of every card, measured once from the styles.
+  static double _cardHeight(BuildContext context) {
+    final theme = Theme.of(context);
+    final scaler = MediaQuery.textScalerOf(context);
+    double linesHeight(TextStyle? style, int lines) {
+      final painter = TextPainter(
+        text: TextSpan(text: List.filled(lines, 'Ag').join('\n'), style: style),
+        textDirection: TextDirection.ltr,
+        textScaler: scaler,
+        maxLines: lines,
+      )..layout();
+      final h = painter.height;
+      painter.dispose();
+      return h;
+    }
+
+    return _padding * 2 + _iconSize + 10 + linesHeight(_titleStyle(theme), 1) + 2 + linesHeight(_bodyStyle(theme), 2);
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -662,22 +968,23 @@ class _Capabilities extends StatelessWidget {
       (Icons.collections_rounded, 'Images & posts', galleryOn ? 'Every file of a post or gallery' : 'Turn on in Settings → Engines', galleryOn),
       (Icons.sell_rounded, 'Thumbnails & tags', 'YouTube covers in every size', true),
     ];
+    final height = _cardHeight(context) + extra;
     return LayoutBuilder(
       builder: (context, c) {
-        const gap = 10.0;
-        final columns = c.maxWidth >= 720 ? 4 : 2;
-        final width = (c.maxWidth - gap * (columns - 1)) / columns;
+        final columns = c.maxWidth >= (wide ? 600 : 720) ? 4 : 2;
+        final width = (c.maxWidth - _gap * (columns - 1)) / columns;
         return Wrap(
-          spacing: gap,
-          runSpacing: gap,
+          spacing: _gap,
+          runSpacing: _gap,
           children: [
             for (final (i, (icon, title, body, on)) in items.indexed)
               SizedBox(
                 width: width,
+                height: height,
                 child: EntranceMotion(
                   index: i,
                   delay: const Duration(milliseconds: 120),
-                  child: _CapabilityCard(icon: icon, title: title, body: body, enabled: on, onTap: onTap),
+                  child: _CapabilityCard(icon: icon, title: title, body: body, enabled: on, grow: extra * 0.6),
                 ),
               ),
           ],
@@ -688,60 +995,351 @@ class _Capabilities extends StatelessWidget {
 }
 
 class _CapabilityCard extends StatelessWidget {
-  const _CapabilityCard({required this.icon, required this.title, required this.body, required this.enabled, required this.onTap});
+  const _CapabilityCard({required this.icon, required this.title, required this.body, required this.enabled, this.grow = 0});
 
   final IconData icon;
   final String title;
   final String body;
   final bool enabled;
+
+  /// How much larger the icon tile is (part of a taller desktop card).
+  final double grow;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    final iconSize = _Capabilities._iconSize + grow;
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: scheme.surfaceContainerLowest.withValues(alpha: 0.6),
+        borderRadius: BorderRadius.circular(22),
+        border: Border.all(color: scheme.outlineVariant.withValues(alpha: 0.3)),
+      ),
+      child: Opacity(
+        opacity: enabled ? 1 : 0.6,
+        child: Padding(
+          padding: const EdgeInsets.all(_Capabilities._padding),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                width: iconSize,
+                height: iconSize,
+                decoration: BoxDecoration(
+                  gradient: enabled ? tileGradient : null,
+                  color: enabled ? null : scheme.surfaceContainerHighest,
+                  borderRadius: BorderRadius.circular(12),
+                  boxShadow: enabled
+                      ? [BoxShadow(color: AppColors.violetBright.withValues(alpha: 0.25), blurRadius: 12, offset: const Offset(0, 5))]
+                      : null,
+                ),
+                child: Icon(icon, color: enabled ? Colors.white : scheme.onSurfaceVariant, size: 20 + grow * 0.5),
+              ),
+              const SizedBox(height: 10),
+              Text(title, maxLines: 1, overflow: TextOverflow.ellipsis, style: _Capabilities._titleStyle(theme)),
+              const SizedBox(height: 2),
+              Text(body, maxLines: 2, overflow: TextOverflow.ellipsis, style: _Capabilities._bodyStyle(theme)),
+              // Titles line up across the cards; a one-line description
+              // leaves its spare line (and a taller desktop card its extra)
+              // at the bottom.
+              const Spacer(),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ───────────── Desktop: How it works, Recent downloads ─────────────
+
+/// Three steps under the "What FetchNet saves" cards on large screens.
+/// Information only. [extra] (to fill the window) makes every step taller,
+/// its contents centered.
+class _HowItWorks extends StatelessWidget {
+  const _HowItWorks({required this.extra});
+
+  final double extra;
+
+  static const _steps = [
+    (Icons.content_paste_rounded, 'Paste a link', 'From YouTube, Instagram, X, Facebook or 1000+ other sites.'),
+    (Icons.tune_rounded, 'Pick what you want', 'A video quality, MP3 or M4A, a thumbnail, or the files of a post.'),
+    (Icons.folder_special_rounded, 'Find it sorted', 'Saved in the FetchNet folder, in Images, Audio and Video.'),
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    return HomePanel(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const HomeSectionTitle(
+            icon: Icons.auto_awesome_rounded,
+            title: 'How it works',
+            subtitle: 'Three steps, on any site FetchNet can read.',
+          ),
+          const SizedBox(height: 14),
+          IntrinsicHeight(
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                for (final (i, (icon, title, body)) in _steps.indexed) ...[
+                  if (i > 0) const SizedBox(width: 10),
+                  Expanded(
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 16),
+                      decoration: BoxDecoration(
+                        color: scheme.surfaceContainerLowest.withValues(alpha: 0.6),
+                        borderRadius: BorderRadius.circular(20),
+                        border: Border.all(color: scheme.outlineVariant.withValues(alpha: 0.3)),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          // The extra height: a picture of the step.
+                          if (extra > 0)
+                            SizedBox(
+                              height: extra,
+                              child: Center(child: _StepPicture(icon: icon, size: math.min(extra * 0.75, 132))),
+                            ),
+                          Row(
+                            children: [
+                              Container(
+                                width: 30,
+                                height: 30,
+                                alignment: Alignment.center,
+                                decoration: const BoxDecoration(gradient: AppColors.brandGradient, shape: BoxShape.circle),
+                                child: Text(
+                                  '${i + 1}',
+                                  style: theme.textTheme.labelLarge?.copyWith(color: Colors.white, fontWeight: FontWeight.w900),
+                                ),
+                              ),
+                              const Spacer(),
+                              if (extra < 40) Icon(icon, color: scheme.primary.withValues(alpha: 0.8), size: 22),
+                            ],
+                          ),
+                          const SizedBox(height: 12),
+                          Text(title, style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w800)),
+                          const SizedBox(height: 3),
+                          Text(
+                            body,
+                            style: theme.textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant, height: 1.4),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// A step's icon on a soft glowing disc, sized to the room it has.
+class _StepPicture extends StatelessWidget {
+  const _StepPicture({required this.icon, required this.size});
+
+  final IconData icon;
+  final double size;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    if (size < 24) return const SizedBox.shrink();
+    return Container(
+      width: size,
+      height: size,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        gradient: RadialGradient(
+          colors: [scheme.primary.withValues(alpha: 0.2), scheme.primary.withValues(alpha: 0.04)],
+        ),
+        border: Border.all(color: scheme.primary.withValues(alpha: 0.18)),
+      ),
+      child: Center(
+        child: Container(
+          width: size * 0.52,
+          height: size * 0.52,
+          decoration: BoxDecoration(
+            gradient: tileGradient,
+            borderRadius: BorderRadius.circular(size * 0.16),
+            boxShadow: [BoxShadow(color: AppColors.violetBright.withValues(alpha: 0.3), blurRadius: size * 0.16, offset: Offset(0, size * 0.05))],
+          ),
+          child: Icon(icon, color: Colors.white, size: size * 0.28),
+        ),
+      ),
+    );
+  }
+}
+
+/// The latest downloads, in the side column on large screens. It shows as
+/// many as fit: [extra] (to fill the window) makes room for more. A tap
+/// opens History, where every action on them is.
+class _RecentDownloads extends StatelessWidget {
+  const _RecentDownloads({required this.extra});
+
+  final double extra;
+
+  /// Height of the panel's contents without [extra].
+  static const _base = 250.0;
+  static const _rowHeight = 52.0;
+  static const _rowGap = 6.0;
+
+  @override
+  Widget build(BuildContext context) {
+    final services = AppScope.of(context);
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    return ListenableBuilder(
+      listenable: services.history,
+      builder: (context, _) {
+        final entries = services.history.entries;
+        return HomePanel(
+          padding: const EdgeInsets.all(14),
+          child: SizedBox(
+            height: _base + extra,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                HomeSectionTitle(
+                  icon: Icons.history_rounded,
+                  title: 'Recent downloads',
+                  subtitle: entries.isEmpty
+                      ? 'What you save shows up here.'
+                      : '${entries.length} in History',
+                  trailing: entries.isEmpty
+                      ? null
+                      : TextButton(
+                          onPressed: () => services.tabRequest.value = 2,
+                          child: const Text('See all'),
+                        ),
+                ),
+                const SizedBox(height: 12),
+                Expanded(
+                  child: entries.isEmpty
+                      ? _empty(theme, scheme)
+                      : LayoutBuilder(
+                          builder: (context, c) {
+                            final fit = ((c.maxHeight + _rowGap) / (_rowHeight + _rowGap)).floor();
+                            final shown = entries.take(fit.clamp(0, entries.length)).toList();
+                            return Column(
+                              children: [
+                                for (final (i, e) in shown.indexed) ...[
+                                  if (i > 0) const SizedBox(height: _rowGap),
+                                  SizedBox(
+                                    height: _rowHeight,
+                                    child: _RecentRow(entry: e, onTap: () => services.tabRequest.value = 2),
+                                  ),
+                                ],
+                              ],
+                            );
+                          },
+                        ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _empty(ThemeData theme, ColorScheme scheme) => Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 52,
+              height: 52,
+              decoration: BoxDecoration(
+                color: scheme.primaryContainer.withValues(alpha: 0.6),
+                borderRadius: BorderRadius.circular(16),
+              ),
+              child: Icon(Icons.download_done_rounded, color: scheme.onPrimaryContainer),
+            ),
+            const SizedBox(height: 10),
+            Text('Nothing saved yet', style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w800)),
+            const SizedBox(height: 2),
+            Text(
+              'Paste a link to get started.',
+              style: theme.textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
+            ),
+          ],
+        ),
+      );
+}
+
+class _RecentRow extends StatelessWidget {
+  const _RecentRow({required this.entry, required this.onTap});
+
+  final HistoryEntry entry;
   final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
-    return PressableScale(
-      child: Material(
-        color: scheme.surfaceContainerLowest.withValues(alpha: 0.6),
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(22),
-          side: BorderSide(color: scheme.outlineVariant.withValues(alpha: 0.3)),
-        ),
-        clipBehavior: Clip.antiAlias,
-        child: InkWell(
-          onTap: onTap,
-          child: Opacity(
-            opacity: enabled ? 1 : 0.6,
-            child: Padding(
-              padding: const EdgeInsets.all(14),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Container(
-                    width: 38,
-                    height: 38,
-                    decoration: BoxDecoration(
-                      gradient: enabled ? tileGradient : null,
-                      color: enabled ? null : scheme.surfaceContainerHighest,
-                      borderRadius: BorderRadius.circular(12),
-                      boxShadow: enabled
-                          ? [BoxShadow(color: AppColors.violetBright.withValues(alpha: 0.25), blurRadius: 12, offset: const Offset(0, 5))]
-                          : null,
-                    ),
-                    child: Icon(icon, color: enabled ? Colors.white : scheme.onSurfaceVariant, size: 20),
-                  ),
-                  const SizedBox(height: 10),
-                  Text(title, style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w800)),
-                  const SizedBox(height: 2),
-                  Text(
-                    body,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: theme.textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant, height: 1.35),
-                  ),
-                ],
+    final (icon, color) = switch (entry.status) {
+      DownloadStatus.completed => (Icons.check_circle_rounded, Colors.green),
+      DownloadStatus.failed => (Icons.error_rounded, scheme.error),
+      DownloadStatus.cancelled => (Icons.cancel_rounded, scheme.outline),
+      _ => (Icons.schedule_rounded, scheme.outline),
+    };
+    final fallback = DecoratedBox(
+      decoration: const BoxDecoration(gradient: tileGradient),
+      child: Icon(kindIcon(entry.kind), color: Colors.white, size: 18),
+    );
+    return Material(
+      color: scheme.surfaceContainerLowest.withValues(alpha: 0.6),
+      borderRadius: BorderRadius.circular(14),
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 8),
+          child: Row(
+            children: [
+              ClipRRect(
+                borderRadius: BorderRadius.circular(9),
+                child: SizedBox(
+                  width: 56,
+                  height: 36,
+                  child: entry.thumbnail == null
+                      ? fallback
+                      : FadeInNetworkImage(url: entry.thumbnail!, cacheWidth: 160, fallback: fallback),
+                ),
               ),
-            ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      entry.title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: theme.textTheme.labelLarge?.copyWith(fontWeight: FontWeight.w700),
+                    ),
+                    Text(
+                      [entry.quality, formatDate(entry.createdAt)].where((s) => s.isNotEmpty).join(' · '),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: theme.textTheme.labelSmall?.copyWith(color: scheme.onSurfaceVariant),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 6),
+              Icon(icon, color: color, size: 18),
+            ],
           ),
         ),
       ),
@@ -753,7 +1351,10 @@ class _CapabilityCard extends StatelessWidget {
 
 /// The downloads running right now, live, with a shortcut to Downloads.
 class _ActiveDownloads extends StatelessWidget {
-  const _ActiveDownloads();
+  const _ActiveDownloads({this.sidebar = false});
+
+  /// Desktop side column: on top of the sites, with the gap below it.
+  final bool sidebar;
 
   @override
   Widget build(BuildContext context) {
@@ -771,7 +1372,7 @@ class _ActiveDownloads extends StatelessWidget {
           child: active.isEmpty
               ? const SizedBox(width: double.infinity)
               : Padding(
-                  padding: const EdgeInsets.only(top: 20),
+                  padding: sidebar ? const EdgeInsets.only(bottom: 20) : const EdgeInsets.only(top: 20),
                   child: Center(
                     child: ConstrainedBox(
                       constraints: const BoxConstraints(maxWidth: 760),

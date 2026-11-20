@@ -30,7 +30,8 @@ enum MediaFolder {
   static MediaFolder forKind(MediaKind kind) => switch (kind) {
         MediaKind.image || MediaKind.thumbnail => images,
         MediaKind.audio => audio,
-        MediaKind.video || MediaKind.post => video,
+        // Subtitles sit next to the videos they belong to.
+        MediaKind.video || MediaKind.post || MediaKind.subtitle => video,
       };
 
   /// The folder for a file with this extension (`jpg`, `.mp3`, ...).

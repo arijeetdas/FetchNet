@@ -8,6 +8,8 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.res.Configuration
 import android.media.MediaScannerConnection
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -426,6 +428,9 @@ class MainActivity : FlutterActivity() {
                     result.success(action)
                 }
 
+                // "Wi-Fi only" downloads: false only on mobile data.
+                "isOnWifi" -> result.success(isOnWifi())
+
                 else -> result.notImplemented()
             }
         }
@@ -519,6 +524,19 @@ class MainActivity : FlutterActivity() {
 
     private fun pipSupported(): Boolean =
         Build.VERSION.SDK_INT >= 26 && packageManager.hasSystemFeature(PackageManager.FEATURE_PICTURE_IN_PICTURE)
+
+    /** On Wi-Fi / Ethernet (or offline: nothing to wait for), not mobile data. */
+    private fun isOnWifi(): Boolean {
+        return try {
+            val cm = getSystemService(CONNECTIVITY_SERVICE) as ConnectivityManager
+            val caps = cm.getNetworkCapabilities(cm.activeNetwork) ?: return true
+            caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) ||
+                caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) ||
+                !caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)
+        } catch (e: Exception) {
+            true
+        }
+    }
 
     /** Android only accepts ratios between 1:2.39 and 2.39:1. */
     private fun aspect(width: Int?, height: Int?): Rational {
@@ -646,7 +664,26 @@ class MainActivity : FlutterActivity() {
             return
         }
         val ext = file.extension.lowercase()
-        val mime = MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext) ?: "*/*"
+        val mime = MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext)
+            ?: if (ext in setOf("srt", "vtt", "lrc", "ass", "ssa", "txt")) "text/plain" else "*/*"
+        // Every file type (subtitles, lyrics...) through FetchNet's provider;
+        // MediaStore only knows media files.
+        val providerUri = runCatching {
+            FileProvider.getUriForFile(applicationContext, "$packageName.share", file)
+        }.getOrNull()
+        if (providerUri != null) {
+            val view = Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(providerUri, mime)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            try {
+                startActivity(Intent.createChooser(view, "Open with").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                done(true)
+                return
+            } catch (e: ActivityNotFoundException) {
+                // Falls through to the MediaStore URI.
+            }
+        }
         MediaScannerConnection.scanFile(applicationContext, arrayOf(path), arrayOf(mime)) { _, uri: Uri? ->
             mainHandler.post {
                 if (uri == null) {

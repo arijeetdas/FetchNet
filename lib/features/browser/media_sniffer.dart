@@ -4,23 +4,37 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
 
-enum SniffedKind { video, audio, hls, dash }
+enum SniffedKind { video, audio, hls, dash, subtitle }
 
 class SniffedMedia {
-  SniffedMedia({required this.url, required this.kind, this.sizeBytes, this.mime});
+  SniffedMedia({required this.url, required this.kind, this.sizeBytes, this.mime, this.referer});
 
   final String url;
   final SniffedKind kind;
   final int? sizeBytes;
   final String? mime;
 
+  /// The page (or embedded player) it was found on: sites often only serve
+  /// media to their own player.
+  final String? referer;
+
   bool get isAudio => kind == SniffedKind.audio;
+  bool get isSubtitle => kind == SniffedKind.subtitle;
+
+  SniffedMedia copyWith({SniffedKind? kind, int? sizeBytes, String? mime}) => SniffedMedia(
+        url: url,
+        kind: kind ?? this.kind,
+        sizeBytes: sizeBytes ?? this.sizeBytes,
+        mime: mime ?? this.mime,
+        referer: referer,
+      );
 
   String get label => switch (kind) {
         SniffedKind.video => 'Video',
         SniffedKind.audio => 'Audio',
         SniffedKind.hls => 'Video stream',
         SniffedKind.dash => 'Video stream',
+        SniffedKind.subtitle => 'Subtitles',
       };
 
   /// Short format tag, e.g. `MP4`, `HLS`, `M4A`.
@@ -93,7 +107,8 @@ class MediaSniffer {
 
   static const videoExt = {'mp4', 'm4v', 'webm', 'mov', 'mkv', 'flv', '3gp', 'avi', 'ogv', 'wmv'};
   static const audioExt = {'mp3', 'm4a', 'aac', 'ogg', 'oga', 'opus', 'flac', 'wav', 'weba', 'wma'};
-  static const _segmentExt = {'ts', 'm4s', 'm4f', 'cmfv', 'cmfa', 'key', 'vtt', 'webvtt', 'srt'};
+  static const subtitleExt = {'vtt', 'webvtt', 'srt', 'ass', 'ssa', 'ttml', 'dfxp'};
+  static const _segmentExt = {'ts', 'm4s', 'm4f', 'cmfv', 'cmfa', 'key'};
   static const _notMediaExt = {
     'js', 'mjs', 'css', 'png', 'jpg', 'jpeg', 'gif', 'svg', 'webp', 'avif', 'ico', 'woff', 'woff2', 'ttf', 'otf',
     'json', 'html', 'htm', 'txt', 'map', 'php', 'wasm',
@@ -144,7 +159,9 @@ class MediaSniffer {
     if (ext != null && _segmentExt.contains(ext)) return true;
     final path = uri.path;
     if (_initSegment.hasMatch(path)) return true;
-    if (ext != null && (videoExt.contains(ext) || audioExt.contains(ext) || ext == 'ts') && _numberedSegment.hasMatch(path)) {
+    if (ext != null &&
+        (videoExt.contains(ext) || audioExt.contains(ext) || subtitleExt.contains(ext) || ext == 'ts') &&
+        _numberedSegment.hasMatch(path)) {
       return true;
     }
     return false;
@@ -159,6 +176,9 @@ class MediaSniffer {
       if (ct == 'video/mp2t') return null; // HLS segment
       if (ct.startsWith('video/')) return SniffedKind.video;
       if (ct.startsWith('audio/')) return SniffedKind.audio;
+      if (ct == 'text/vtt' || ct == 'application/x-subrip' || ct == 'text/x-ssa' || ct == 'application/ttml+xml') {
+        return SniffedKind.subtitle;
+      }
       if (ct == 'application/octet-stream' || ct == 'binary/octet-stream') {
         // Fall through to the URL signals.
       } else {
@@ -177,6 +197,9 @@ class MediaSniffer {
       return SniffedKind.video;
     }
     if (ext != null && audioExt.contains(ext)) return SniffedKind.audio;
+    if (ext != null && subtitleExt.contains(ext)) return SniffedKind.subtitle;
+    // A <track> element: subtitles or captions.
+    if (hint == 'track') return SniffedKind.subtitle;
     final mime = Uri.tryParse(url)?.queryParameters['mime']?.toLowerCase();
     if (mime != null) {
       if (mime.startsWith('video')) return SniffedKind.video;
@@ -196,14 +219,16 @@ class MediaSniffer {
   }
 
   /// Feeds one URL the page requested. [hint] is the element / initiator
-  /// type (`video`, `audio`, `xmlhttprequest`, ...).
-  void consider(String rawUrl, {String? hint}) {
+  /// type (`video`, `audio`, `track`, `xmlhttprequest`, ...); [frame] the
+  /// page or embedded player that requested it (its referer).
+  void consider(String rawUrl, {String? hint, String? frame}) {
     if (!rawUrl.startsWith('http')) return;
     final url = normalize(rawUrl);
+    final from = frame ?? referer;
     // The page later told us a <video> element plays no picture: it's audio.
     final known = found[url];
     if (known != null && hint == 'audio' && known.kind == SniffedKind.video) {
-      found[url] = SniffedMedia(url: url, kind: SniffedKind.audio, sizeBytes: known.sizeBytes, mime: known.mime);
+      found[url] = known.copyWith(kind: SniffedKind.audio);
       onChanged();
       return;
     }
@@ -214,7 +239,7 @@ class MediaSniffer {
     if (isSegment(url)) return;
     final kind = classify(url, hint: hint);
     if (kind != null) {
-      _add(SniffedMedia(url: url, kind: kind));
+      _add(SniffedMedia(url: url, kind: kind, referer: from));
     } else if (worthProbing(url, hint: hint) && _probes < _maxProbes) {
       _probes++;
       final generation = _generation;
@@ -223,12 +248,13 @@ class MediaSniffer {
         if (generation != _generation || head == null) return;
         final kind = classify(url, hint: hint, contentType: head.contentType);
         if (kind == null) return;
-        // Skip tiny clips (ads, UI sounds) when the size is known.
+        // Skip tiny clips (ads, UI sounds) when the size is known; streams
+        // and subtitles are small text files.
         if (head.length != null && head.length! > 0 && head.length! < 120 * 1024 &&
-            kind != SniffedKind.hls && kind != SniffedKind.dash) {
+            kind != SniffedKind.hls && kind != SniffedKind.dash && kind != SniffedKind.subtitle) {
           return;
         }
-        _add(SniffedMedia(url: url, kind: kind, sizeBytes: head.length, mime: head.contentType));
+        _add(SniffedMedia(url: url, kind: kind, sizeBytes: head.length, mime: head.contentType, referer: from));
       });
     }
   }
@@ -259,7 +285,7 @@ class MediaSniffer {
     onChanged();
     // Anything not already known to be audio gets its content checked:
     // audio-only .mp4 / .webm tracks and audio HLS look like video otherwise.
-    if (!media.isAudio && _refines < _maxRefines) {
+    if (!media.isAudio && !media.isSubtitle && _refines < _maxRefines) {
       _refines++;
       final generation = _generation;
       _enqueue(() async {
@@ -299,7 +325,7 @@ class MediaSniffer {
       final text = latin1.decode(r.bytes, allowInvalid: true);
       final kind = m.kind == SniffedKind.hls ? kindFromHlsPlaylist(text) : kindFromDashManifest(text);
       if (kind != SniffedKind.audio) return null;
-      return SniffedMedia(url: m.url, kind: SniffedKind.audio, mime: m.mime);
+      return m.copyWith(kind: SniffedKind.audio);
     }
     final r = await _fetchRange(m.url, 'bytes=0-131071', 131072);
     if (r == null) return null;
@@ -310,7 +336,7 @@ class MediaSniffer {
       final tail = await _fetchRange(m.url, 'bytes=-262144', 262144);
       if (tail != null) kind = kindFromBytes(tail.bytes);
     }
-    return SniffedMedia(url: m.url, kind: kind ?? m.kind, sizeBytes: size, mime: m.mime);
+    return m.copyWith(kind: kind ?? m.kind, sizeBytes: size);
   }
 
   /// Reads up to [maxBytes] (never more), optionally with a Range header.
@@ -404,8 +430,19 @@ class MediaSniffer {
     return null;
   }
 
+  /// What [url] serves (Content-Type, size, Content-Disposition), without
+  /// downloading it: for links Browser Mode can't tell from the URL.
+  Future<({String? contentType, int? length, String? disposition})?> probe(
+    String url, {
+    Map<String, String> headers = const {},
+  }) =>
+      _probe(url, headers: headers);
+
   /// HEAD (or a 1-byte ranged GET) to read Content-Type / size.
-  Future<({String? contentType, int? length})?> _probe(String url) async {
+  Future<({String? contentType, int? length, String? disposition})?> _probe(
+    String url, {
+    Map<String, String> headers = const {},
+  }) async {
     final client = HttpClient()..connectionTimeout = const Duration(seconds: 5);
     try {
       Future<HttpClientResponse> send(String method) async {
@@ -413,6 +450,7 @@ class MediaSniffer {
         req.followRedirects = true;
         if (userAgent != null) req.headers.set(HttpHeaders.userAgentHeader, userAgent!);
         if (referer != null) req.headers.set(HttpHeaders.refererHeader, referer!);
+        headers.forEach(req.headers.set);
         if (method == 'GET') req.headers.set(HttpHeaders.rangeHeader, 'bytes=0-0');
         return req.close().timeout(const Duration(seconds: 6));
       }
@@ -425,7 +463,11 @@ class MediaSniffer {
       int? length = res.contentLength > 1 ? res.contentLength : null;
       final range = res.headers.value(HttpHeaders.contentRangeHeader);
       if (range != null && range.contains('/')) length = int.tryParse(range.split('/').last) ?? length;
-      return (contentType: res.headers.value(HttpHeaders.contentTypeHeader), length: length);
+      return (
+        contentType: res.headers.value(HttpHeaders.contentTypeHeader),
+        length: length,
+        disposition: res.headers.value('content-disposition'),
+      );
     } catch (_) {
       return null;
     } finally {

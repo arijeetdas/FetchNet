@@ -7,8 +7,10 @@ import '../engine/gallery_engine.dart';
 import '../services/cover_art.dart';
 import '../services/gallery_service.dart';
 import '../services/download_manager.dart';
+import '../services/extra_settings.dart';
 import '../services/fetch_service.dart';
 import '../services/history_store.dart';
+import '../services/lyrics_service.dart';
 import '../services/sites_service.dart';
 import '../services/storage_service.dart';
 import '../services/app_updater.dart';
@@ -18,6 +20,7 @@ import '../services/youtube_client.dart';
 import '../services/youtube_service.dart';
 import '../services/youtube_streams.dart';
 import 'app_prefs.dart';
+import 'platform/device_environment.dart';
 import 'platform/native_bridge.dart';
 
 /// Everything the UI needs, created once in `main`.
@@ -33,6 +36,8 @@ class AppServices {
     required this.sites,
     required this.youtubeStreams,
     required this.gallery,
+    required this.extras,
+    required this.cookieArgs,
   })  : themeMode = ValueNotifier(prefs.themeMode),
         showAnimations = ValueNotifier(prefs.showAnimations);
 
@@ -53,18 +58,26 @@ class AppServices {
     }
 
     final galleryEngine = GalleryDlEngine.create(prefs, engine);
+    final extras = ExtraSettings(prefs.store);
 
     return AppServices._(
       prefs: prefs,
       engine: engine,
       storage: storage,
       history: history,
+      extras: extras,
+      cookieArgs: cookieArgs,
       gallery: GalleryService(galleryEngine, prefs, cookieArgs: cookieArgs),
       downloads: DownloadManager(
         gallery: galleryEngine,
         engine: engine,
         storage: storage,
         history: history,
+        settings: extras,
+        queueStore: QueueStore(load: () => prefs.downloadQueue, save: prefs.setDownloadQueue),
+        // Only phones and tablets know mobile data from Wi-Fi.
+        onWifi: DeviceEnvironment.isAndroid ? NativeBridge.isOnWifi : null,
+        lyricsService: LyricsService(),
         // YouTube Settings → cover art for audio downloads.
         extraArgs: (info, option) => coverArtArgs(
           info,
@@ -97,6 +110,16 @@ class AppServices {
 
   /// gallery-dl: posts, galleries and images.
   final GalleryService gallery;
+
+  /// Settings → Extra Settings.
+  final ExtraSettings extras;
+
+  /// The browser's cookies for a link (see [FetchService.cookieArgs]).
+  final CookieArgsProvider cookieArgs;
+
+  /// A lookup of its own (a popup's), so cancelling it never stops the
+  /// Home tab's lookup and the other way round.
+  FetchService newFetcher() => FetchService(engine, cookieArgs: cookieArgs);
   final UpdateService updates = UpdateService();
 
   /// Downloads and installs FetchNet updates in the app.
@@ -144,6 +167,8 @@ class AppServices {
     if (prefs.galleryEnabled) unawaited(gallery.engine.initialize());
     unawaited(youtube.refresh());
     unawaited(updates.check());
+    // Downloads left in the queue last time carry on.
+    unawaited(downloads.restore());
 
     final initial = await NativeBridge.consumeSharedText();
     if (initial != null) incomingLink.value = initial;

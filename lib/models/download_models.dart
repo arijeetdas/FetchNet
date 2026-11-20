@@ -1,8 +1,10 @@
+import '../services/lyrics_service.dart';
 import 'media_info.dart';
 
-enum DownloadStatus { queued, starting, downloading, processing, completed, failed, cancelled }
+enum DownloadStatus { queued, starting, downloading, processing, paused, completed, failed, cancelled }
 
-/// A download in progress (lives only in memory).
+/// A download in the queue. Unfinished ones are saved (see [toJson]) so the
+/// queue survives closing the app.
 class DownloadTask {
   DownloadTask({
     required this.id,
@@ -12,9 +14,21 @@ class DownloadTask {
     required this.option,
     required this.requestArgs,
     this.extraArgs = const [],
+    this.subtitleArgs = const [],
     this.thumbnail,
     this.extractor,
-  }) : createdAt = DateTime.now();
+    this.lyrics,
+    this.lyricsMode,
+    DateTime? createdAt,
+  }) : createdAt = createdAt ?? DateTime.now();
+
+  /// The song to add synced lyrics for (Settings → Extra Settings), and
+  /// how: `embed`, `file` or `both`.
+  final LyricsQuery? lyrics;
+  final String? lyricsMode;
+
+  /// Lyrics to save as a `.lrc` next to the finished file.
+  String? lyricsFile;
 
   final String id;
   final String url;
@@ -27,6 +41,10 @@ class DownloadTask {
 
   /// Post-processing picked from settings (e.g. embedded cover art).
   final List<String> extraArgs;
+
+  /// Subtitles (Settings → Extra Settings). Dropped when the site refuses
+  /// them, so the video itself still downloads.
+  List<String> subtitleArgs;
   final String? thumbnail;
   final String? extractor;
   final DateTime createdAt;
@@ -54,11 +72,88 @@ class DownloadTask {
 
   int get expectedParts => option.needsMerge ? 2 : 1;
 
+  /// Not finished yet: waiting, running or paused.
   bool get isActive =>
       status == DownloadStatus.queued ||
       status == DownloadStatus.starting ||
       status == DownloadStatus.downloading ||
-      status == DownloadStatus.processing;
+      status == DownloadStatus.processing ||
+      status == DownloadStatus.paused;
+
+  /// Holding a slot: an engine is working on it.
+  bool get isRunning =>
+      status == DownloadStatus.starting || status == DownloadStatus.downloading || status == DownloadStatus.processing;
+
+  /// Saved queue entry. A running download is saved as queued: it carries
+  /// on (from its partial file) when the app opens again. Browser cookies
+  /// (temporary files) aren't kept; a refused download asks for them again.
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'url': url,
+        'title': title,
+        'fileBaseName': fileBaseName,
+        'option': option.toJson(),
+        'requestArgs': withoutCookies(requestArgs),
+        if (extraArgs.isNotEmpty) 'extraArgs': extraArgs,
+        if (subtitleArgs.isNotEmpty) 'subtitleArgs': subtitleArgs,
+        if (thumbnail != null) 'thumbnail': thumbnail,
+        if (extractor != null) 'extractor': extractor,
+        if (lyrics != null) 'lyrics': lyrics!.toJson(),
+        if (lyricsMode != null) 'lyricsMode': lyricsMode,
+        'createdAt': createdAt.toIso8601String(),
+        'status': switch (status) {
+          DownloadStatus.paused => 'paused',
+          DownloadStatus.failed => 'failed',
+          _ => 'queued',
+        },
+        if (error != null) 'error': error,
+        if (errorHint != null) 'errorHint': errorHint,
+      };
+
+  static DownloadTask? fromJson(Map<String, dynamic> j) {
+    try {
+      final option = DownloadOption.fromJson((j['option'] as Map).cast<String, dynamic>());
+      if (option == null) return null;
+      List<String> strings(Object? v) => [for (final s in (v as List?) ?? const []) if (s is String) s];
+      return DownloadTask(
+        id: j['id'] as String,
+        url: j['url'] as String,
+        title: j['title'] as String,
+        fileBaseName: j['fileBaseName'] as String,
+        option: option,
+        requestArgs: strings(j['requestArgs']),
+        extraArgs: strings(j['extraArgs']),
+        subtitleArgs: strings(j['subtitleArgs']),
+        thumbnail: j['thumbnail'] as String?,
+        extractor: j['extractor'] as String?,
+        lyrics: LyricsQuery.fromJson(j['lyrics']),
+        lyricsMode: j['lyricsMode'] as String?,
+        createdAt: DateTime.tryParse('${j['createdAt']}'),
+      )
+        ..status = switch (j['status']) {
+          'paused' => DownloadStatus.paused,
+          'failed' => DownloadStatus.failed,
+          _ => DownloadStatus.queued,
+        }
+        ..error = j['error'] as String?
+        ..errorHint = j['errorHint'] as String?;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// [args] without `--cookies <file>` pairs.
+  static List<String> withoutCookies(List<String> args) {
+    final out = <String>[];
+    for (var i = 0; i < args.length; i++) {
+      if (args[i] == '--cookies') {
+        i++;
+        continue;
+      }
+      out.add(args[i]);
+    }
+    return out;
+  }
 }
 
 /// A finished / failed download, persisted in SharedPreferences.

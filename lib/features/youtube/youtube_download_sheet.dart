@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../core/app_services.dart';
+import '../../models/media_info.dart';
 import '../../services/fetch_service.dart';
 import '../../services/youtube_streams.dart';
 import '../../widgets/brand.dart';
@@ -11,7 +12,56 @@ import '../home/media_result_view.dart';
 /// rename step as the Home tab. When the video is already playing, its
 /// yt-dlp lookup is reused, so the options appear instantly.
 Future<void> showYtDownloadSheet(BuildContext context, {required String videoId, String? title, String? thumbnail}) {
+  return _showSheet(
+    context,
+    (services) => _YouTubeLookup(services.youtubeStreams, videoId),
+    title: title,
+    thumbnail: thumbnail,
+  );
+}
+
+/// The same popup for any link (a video of a playlist or channel): its
+/// preview, formats, subtitles and tags, looked up on its own.
+Future<void> showLinkDownloadSheet(
+  BuildContext context, {
+  required String url,
+  String? title,
+  String? thumbnail,
+  List<String> requestArgs = const [],
+}) {
+  final videoId = youTubeVideoId(url);
+  return _showSheet(
+    context,
+    (services) => videoId != null
+        ? _YouTubeLookup(services.youtubeStreams, videoId)
+        : _LinkLookup(services.newFetcher(), url, requestArgs),
+    title: title,
+    thumbnail: thumbnail,
+  );
+}
+
+/// `dQw4w9WgXcQ` for a YouTube watch / Shorts / youtu.be link.
+String? youTubeVideoId(String url) {
+  final uri = Uri.tryParse(url);
+  if (uri == null) return null;
+  final host = uri.host.toLowerCase();
+  if (host == 'youtu.be') return uri.pathSegments.firstOrNull;
+  if (!host.endsWith('youtube.com')) return null;
+  final v = uri.queryParameters['v'];
+  if (v != null && v.isNotEmpty) return v;
+  final s = uri.pathSegments;
+  if (s.length >= 2 && (s[0] == 'shorts' || s[0] == 'live' || s[0] == 'embed')) return s[1];
+  return null;
+}
+
+Future<void> _showSheet(
+  BuildContext context,
+  _Lookup Function(AppServices services) lookup, {
+  String? title,
+  String? thumbnail,
+}) {
   final size = MediaQuery.sizeOf(context);
+  final services = AppScope.of(context);
   return showModalBottomSheet<void>(
     context: context,
     isScrollControlled: true,
@@ -19,14 +69,66 @@ Future<void> showYtDownloadSheet(BuildContext context, {required String videoId,
     showDragHandle: true,
     constraints: BoxConstraints(maxWidth: 980, maxHeight: size.height * 0.92),
     shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(28))),
-    builder: (_) => _DownloadSheet(videoId: videoId, title: title, thumbnail: thumbnail),
+    builder: (_) => _DownloadSheet(lookup: lookup(services), title: title, thumbnail: thumbnail),
   );
 }
 
-class _DownloadSheet extends StatefulWidget {
-  const _DownloadSheet({required this.videoId, this.title, this.thumbnail});
+/// Looks up the media a popup shows; [close] gives up on it.
+abstract class _Lookup {
+  Future<MediaInfo> run({bool refresh = false});
+  void close();
+}
 
-  final String videoId;
+class _YouTubeLookup implements _Lookup {
+  _YouTubeLookup(this._resolver, this._videoId);
+
+  final YtStreamResolver _resolver;
+  final String _videoId;
+
+  /// Still waiting: closing the popup releases the lookup (stopping it when
+  /// the player isn't waiting for the same video).
+  bool _waiting = false;
+  int _gen = 0;
+
+  @override
+  Future<MediaInfo> run({bool refresh = false}) {
+    if (_waiting) _resolver.release(_videoId);
+    _waiting = true;
+    final gen = ++_gen;
+    final f = _resolver.resolve(_videoId, refresh: refresh);
+    f.whenComplete(() {
+      if (gen == _gen) _waiting = false;
+    }).ignore();
+    return f.then((s) => s.info);
+  }
+
+  @override
+  void close() {
+    if (_waiting) _resolver.release(_videoId);
+  }
+}
+
+class _LinkLookup implements _Lookup {
+  _LinkLookup(this._fetcher, this._url, this._requestArgs);
+
+  final FetchService _fetcher;
+  final String _url;
+  final List<String> _requestArgs;
+
+  @override
+  Future<MediaInfo> run({bool refresh = false}) async {
+    await _fetcher.cancel();
+    return _fetcher.fetch(_url, requestArgs: _requestArgs);
+  }
+
+  @override
+  void close() => _fetcher.cancel();
+}
+
+class _DownloadSheet extends StatefulWidget {
+  const _DownloadSheet({required this.lookup, this.title, this.thumbnail});
+
+  final _Lookup lookup;
   final String? title;
   final String? thumbnail;
 
@@ -35,30 +137,13 @@ class _DownloadSheet extends StatefulWidget {
 }
 
 class _DownloadSheetState extends State<_DownloadSheet> {
-  late final YtStreamResolver _resolver = AppScope.of(context).youtubeStreams;
-  late Future<YtStreams> _future = _lookup();
+  late Future<MediaInfo> _future = widget.lookup.run();
 
-  /// Still waiting: closing the popup releases the lookup (stopping it when
-  /// the player isn't waiting for the same video).
-  bool _waiting = false;
-  int _gen = 0;
-
-  Future<YtStreams> _lookup({bool refresh = false}) {
-    if (_waiting) _resolver.release(widget.videoId);
-    _waiting = true;
-    final gen = ++_gen;
-    final f = _resolver.resolve(widget.videoId, refresh: refresh);
-    f.whenComplete(() {
-      if (gen == _gen) _waiting = false;
-    }).ignore();
-    return f;
-  }
-
-  void _retry() => setState(() => _future = _lookup(refresh: true));
+  void _retry() => setState(() => _future = widget.lookup.run(refresh: true));
 
   @override
   void dispose() {
-    if (_waiting) _resolver.release(widget.videoId);
+    widget.lookup.close();
     super.dispose();
   }
 
@@ -90,14 +175,14 @@ class _DownloadSheetState extends State<_DownloadSheet> {
           ),
         ),
         Flexible(
-          child: FutureBuilder<YtStreams>(
+          child: FutureBuilder<MediaInfo>(
             future: _future,
             builder: (context, snap) {
               Widget child;
               if (snap.hasData) {
                 child = MediaResultView(
                   key: const ValueKey('options'),
-                  info: snap.data!.info,
+                  info: snap.data!,
                   framed: false,
                   onQueued: () {
                     if (mounted) Navigator.of(context).pop();

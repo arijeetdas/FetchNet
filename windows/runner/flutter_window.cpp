@@ -1,8 +1,45 @@
 #include "flutter_window.h"
 
+#include <flutter/standard_method_codec.h>
+#include <shellapi.h>
+#include <shlobj.h>
+
 #include <optional>
+#include <string>
+#include <thread>
 
 #include "flutter/generated_plugin_registrant.h"
+
+namespace {
+
+std::wstring Utf16FromUtf8(const std::string& text) {
+  if (text.empty()) return std::wstring();
+  const int length = ::MultiByteToWideChar(CP_UTF8, 0, text.data(), static_cast<int>(text.size()), nullptr, 0);
+  if (length <= 0) return std::wstring();
+  std::wstring wide(static_cast<size_t>(length), L'\0');
+  ::MultiByteToWideChar(CP_UTF8, 0, text.data(), static_cast<int>(text.size()), &wide[0], length);
+  return wide;
+}
+
+// Windows' "How do you want to open this file?" for |path|, in front of
+// FetchNet's window. When it can't be shown, the file opens in its default
+// app. It runs on a thread of its own: the dialog waits for the user, and
+// FetchNet keeps drawing meanwhile.
+void ShowOpenWith(HWND owner, std::wstring path) {
+  std::thread([owner, path]() {
+    const HRESULT init = ::CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
+    OPENASINFO info = {};
+    info.pcszFile = path.c_str();
+    info.oaifInFlags = OAIF_ALLOW_REGISTRATION | OAIF_REGISTER_EXT | OAIF_EXEC;
+    const HRESULT hr = ::SHOpenWithDialog(owner, &info);
+    if (FAILED(hr) && hr != HRESULT_FROM_WIN32(ERROR_CANCELLED)) {
+      ::ShellExecuteW(owner, L"open", path.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+    }
+    if (SUCCEEDED(init)) ::CoUninitialize();
+  }).detach();
+}
+
+}  // namespace
 
 FlutterWindow::FlutterWindow(const flutter::DartProject& project)
     : project_(project) {}
@@ -27,6 +64,31 @@ bool FlutterWindow::OnCreate() {
   RegisterPlugins(flutter_controller_->engine());
   SetChildContent(flutter_controller_->view()->GetNativeWindow());
 
+  windows_channel_ = std::make_unique<flutter::MethodChannel<flutter::EncodableValue>>(
+      flutter_controller_->engine()->messenger(), "fetchnet/windows",
+      &flutter::StandardMethodCodec::GetInstance());
+  windows_channel_->SetMethodCallHandler(
+      [this](const flutter::MethodCall<flutter::EncodableValue>& call,
+             std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> result) {
+        if (call.method_name() == "openWith") {
+          const auto* args = std::get_if<flutter::EncodableMap>(call.arguments());
+          const flutter::EncodableValue* path = nullptr;
+          if (args) {
+            auto it = args->find(flutter::EncodableValue("path"));
+            if (it != args->end()) path = &it->second;
+          }
+          const auto* text = path ? std::get_if<std::string>(path) : nullptr;
+          if (!text || text->empty()) {
+            result->Success(flutter::EncodableValue(false));
+            return;
+          }
+          ShowOpenWith(GetHandle(), Utf16FromUtf8(*text));
+          result->Success(flutter::EncodableValue(true));
+          return;
+        }
+        result->NotImplemented();
+      });
+
   flutter_controller_->engine()->SetNextFrameCallback([&]() {
     this->Show();
   });
@@ -40,6 +102,7 @@ bool FlutterWindow::OnCreate() {
 }
 
 void FlutterWindow::OnDestroy() {
+  windows_channel_ = nullptr;
   if (flutter_controller_) {
     flutter_controller_ = nullptr;
   }

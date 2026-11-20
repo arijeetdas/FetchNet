@@ -1,6 +1,8 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- "Wi-Fi only" downloads: tell Wi-Fi from mobile data. -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <!-- Public Download/FetchNet folder on Android 10 and older. Android 11+ needs no permission. -->
     <uses-permission
         android:name="android.permission.WRITE_EXTERNAL_STORAGE"

@@ -5,11 +5,11 @@ import 'package:flutter/services.dart';
 
 import '../../core/app_services.dart';
 import '../../core/format.dart';
-import '../../core/platform/native_bridge.dart';
 import '../../models/download_models.dart';
 import '../../widgets/app_dialog.dart';
 import '../../widgets/kind_icon.dart';
 import '../../widgets/motion/page_motions.dart';
+import '../downloads/file_actions_sheet.dart';
 import '../shell/home_shell.dart';
 
 class HistoryScreen extends StatefulWidget {
@@ -244,15 +244,27 @@ class _HistoryTile extends StatelessWidget {
                 overflow: TextOverflow.ellipsis,
               ),
             ),
-            if (exists)
+            if (exists) ...[
+              // Videos play and pictures show in FetchNet; other files open
+              // in another app.
               ListTile(
                 leading: const Icon(Icons.play_arrow_rounded),
-                title: const Text('Open file'),
+                title: const Text('Open'),
                 onTap: () {
                   Navigator.pop(sheet);
-                  NativeBridge.openFile(entry.filePath!);
+                  openDownloadedFile(context, entry);
                 },
               ),
+              ListTile(
+                leading: const Icon(Icons.open_in_new_rounded),
+                title: const Text('Open with'),
+                subtitle: const Text('Another app on your device'),
+                onTap: () {
+                  Navigator.pop(sheet);
+                  openWithApp(context, entry.filePath!);
+                },
+              ),
+            ],
             ListTile(
               leading: const Icon(Icons.replay_rounded),
               title: const Text('Download again'),

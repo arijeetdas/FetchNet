@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:path/path.dart' as p;
@@ -11,11 +13,64 @@ import '../../models/download_models.dart';
 import '../../models/media_info.dart';
 import '../../widgets/app_dialog.dart';
 import '../../widgets/brand.dart';
+import '../home/media_preview.dart';
+import '../player/audio_player_screen.dart';
+import '../player/video_player_screen.dart';
+import '../youtube/youtube_download_sheet.dart' show youTubeVideoId;
 
+/// Tapping a saved file: songs and videos play in FetchNet's players, pictures open
+/// in FetchNet's viewer (a post's pictures together, to swipe through);
+/// anything else goes to [openWithApp].
 Future<void> openDownloadedFile(BuildContext context, HistoryEntry entry) async {
-  final ok = await NativeBridge.openFile(entry.filePath!);
+  final path = entry.filePath;
+  if (path == null || !File(path).existsSync()) {
+    showSnack(context, 'This file is no longer on your device.', kind: ToastKind.error);
+    return;
+  }
+  // An audio download saved as .webm / .mp4 is still a song.
+  if (_isAudio(path) || (entry.kind == MediaKind.audio && _isVideo(path))) {
+    // No picture inside the file: the video's thumbnail is the cover.
+    final id = youTubeVideoId(entry.url);
+    final art = entry.thumbnail ?? (id == null ? null : 'https://i.ytimg.com/vi/$id/hqdefault.jpg');
+    await openAudioPlayer(context, path: path, title: entry.title, artUrl: art);
+    return;
+  }
+  if (_isVideo(path)) {
+    await openVideoPlayer(context, path: path, title: entry.title);
+    return;
+  }
+  final pictures = [
+    for (final f in entry.allFiles)
+      if (_isPicture(f) && File(f).existsSync()) f,
+  ];
+  if (pictures.isNotEmpty) {
+    await showMediaPreview(
+      context,
+      items: [
+        for (final f in pictures) PreviewItem(url: '', filePath: f, caption: p.basename(f), icon: Icons.photo_rounded),
+      ],
+    );
+    return;
+  }
+  await openWithApp(context, path);
+}
+
+/// "Open with": another app on the device, for any file (Android's app
+/// chooser, Windows' "How do you want to open this file?").
+Future<void> openWithApp(BuildContext context, String path) async {
+  final ok = await NativeBridge.openWith(path);
   if (!ok && context.mounted) showSnack(context, 'No app found to open this file.', kind: ToastKind.error);
 }
+
+bool _isPicture(String path) => const {'.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp', '.avif'}
+    .contains(p.extension(path).toLowerCase());
+
+bool _isAudio(String path) =>
+    const {'.mp3', '.m4a', '.opus', '.ogg', '.oga', '.flac', '.wav', '.aac', '.weba', '.alac', '.wma', '.mka', '.aiff'}
+        .contains(p.extension(path).toLowerCase());
+
+bool _isVideo(String path) => const {'.mp4', '.m4v', '.webm', '.mkv', '.mov', '.avi', '.flv', '.3gp', '.ts', '.wmv'}
+    .contains(p.extension(path).toLowerCase());
 
 Future<void> deleteDownloadedFile(BuildContext context, HistoryEntry entry) async {
   final services = AppScope.of(context);
@@ -31,10 +86,14 @@ Future<void> deleteDownloadedFile(BuildContext context, HistoryEntry entry) asyn
 
 /// Android: the share sheet. Desktop: the file goes on the clipboard, ready
 /// to paste into a chat, an email or a folder.
-Future<void> shareDownloadedFile(BuildContext context, HistoryEntry entry) async {
-  final path = entry.filePath!;
+Future<void> shareDownloadedFile(BuildContext context, HistoryEntry entry) =>
+    shareFilePath(context, entry.filePath!, title: entry.title);
+
+/// Shares a saved file: Android's share sheet; on a computer, the file goes
+/// on the clipboard.
+Future<void> shareFilePath(BuildContext context, String path, {String? title}) async {
   if (NativeBridge.canShareNatively) {
-    final error = await NativeBridge.shareFile(path, title: entry.title);
+    final error = await NativeBridge.shareFile(path, title: title);
     if (error != null && context.mounted) showSnack(context, 'Couldn\'t share this file. $error', kind: ToastKind.error);
     return;
   }
@@ -93,16 +152,19 @@ class _FileActionsSheet extends StatelessWidget {
       MediaKind.thumbnail => 'Thumbnail',
       MediaKind.image => 'Image',
       MediaKind.post => entry.files.length > 1 ? 'Post · ${entry.files.length} files' : 'Post',
+      MediaKind.subtitle => 'Subtitles',
     };
     final link = Uri.tryParse(entry.url);
     final hasLink = link != null && link.hasScheme && link.host.isNotEmpty;
 
     final quick = <_QuickAction>[
+      // Another app, for every kind of file (a tap on the file opens it in
+      // FetchNet).
       _QuickAction(
-        icon: Icons.play_arrow_rounded,
-        label: 'Open',
+        icon: Icons.open_in_new_rounded,
+        label: 'Open with',
         primary: true,
-        onTap: () => _run(context, (c) => openDownloadedFile(c, entry)),
+        onTap: () => _run(context, (c) => openWithApp(c, entry.filePath!)),
       ),
       _QuickAction(
         icon: android ? Icons.share_rounded : Icons.copy_rounded,

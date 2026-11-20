@@ -28,6 +28,7 @@ import 'fetch_progress.dart';
 import 'home_kit.dart';
 import 'link_dock.dart';
 import 'media_result_view.dart';
+import 'playlist_view.dart';
 import 'post_result_view.dart';
 import 'sites_panel.dart';
 import 'status_deck.dart';
@@ -64,22 +65,81 @@ class _HomeScreenState extends State<HomeScreen> {
   LaneState _ytLane = LaneState.waiting;
   LaneState _galleryLane = LaneState.waiting;
 
+  /// A link found on the clipboard, offered under the link box.
+  String? _clipboardOffer;
+  late final AppLifecycleListener _lifecycle;
+
   @override
   void initState() {
     super.initState();
     _services = AppScope.of(context);
     _services.incomingLink.addListener(_onIncomingLink);
+    _services.tabRequest.addListener(_onTab);
     _controller.addListener(() => setState(() {}));
-    WidgetsBinding.instance.addPostFrameCallback((_) => _onIncomingLink());
+    // Back in the app (or its window focused again): maybe a link was copied.
+    _lifecycle = AppLifecycleListener(onResume: _checkClipboard);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _onIncomingLink();
+      _checkClipboard();
+    });
   }
 
   @override
   void dispose() {
     _services.incomingLink.removeListener(_onIncomingLink);
+    _services.tabRequest.removeListener(_onTab);
+    _lifecycle.dispose();
     _controller.dispose();
     _focus.dispose();
     super.dispose();
   }
+
+  void _onTab() {
+    if (_services.tabRequest.value == 0) _checkClipboard();
+  }
+
+  /// Offers a copied link once (Settings → Extra Settings → Detect copied
+  /// links). Skipped while a link is being read, and for the link already
+  /// in the box.
+  Future<void> _checkClipboard() async {
+    final extras = _services.extras;
+    if (!extras.detectClipboard || _phase == _Phase.loading || !mounted) return;
+    try {
+      // Cheap check first: no reading (and no "pasted" notice) without text.
+      if (!await Clipboard.hasStrings()) return;
+      final text = (await Clipboard.getData(Clipboard.kTextPlain))?.text?.trim();
+      final url = text == null ? null : extractUrl(text);
+      if (!mounted || url == null) return;
+      if (url == extras.lastOfferedLink || url == extractUrl(_controller.text) || url == _lastUrl) return;
+      await extras.setLastOfferedLink(url);
+      if (mounted) setState(() => _clipboardOffer = url);
+    } catch (_) {}
+  }
+
+  void _takeClipboardOffer() {
+    final url = _clipboardOffer;
+    if (url == null) return;
+    setState(() => _clipboardOffer = null);
+    _controller.text = url;
+    _fetch(url: url);
+  }
+
+  /// The copied-link card under the link box (it slides away when gone).
+  Widget _clipboardCard() => AnimatedSize(
+        duration: homeDuration(context, const Duration(milliseconds: 300)),
+        curve: Curves.easeOutCubic,
+        alignment: Alignment.topCenter,
+        child: _clipboardOffer == null || _phase == _Phase.loading
+            ? const SizedBox(width: double.infinity)
+            : Padding(
+                padding: const EdgeInsets.only(top: 12),
+                child: _ClipboardOffer(
+                  url: _clipboardOffer!,
+                  onFetch: _takeClipboardOffer,
+                  onDismiss: () => setState(() => _clipboardOffer = null),
+                ),
+              ),
+      );
 
   void _onIncomingLink() {
     final text = _services.incomingLink.value;
@@ -242,10 +302,11 @@ class _HomeScreenState extends State<HomeScreen> {
     final Widget? media = info == null
         ? null
         : info.isPlaylist
-            ? _PlaylistView(
+            ? PlaylistView(
                 key: ValueKey('pl-${info.url}'),
                 info: info,
-                onPick: (entry) {
+                // A channel's Videos / Shorts tab, or a playlist of it.
+                onOpenList: (entry) {
                   _controller.text = entry.url;
                   _fetch(url: entry.url, requestArgs: info.requestArgs);
                 },
@@ -627,6 +688,7 @@ class _HomeScreenState extends State<HomeScreen> {
                               crossAxisAlignment: CrossAxisAlignment.stretch,
                               children: [
                                 EntranceMotion(index: 2, child: _linkDock()),
+                                _clipboardCard(),
                                 const SizedBox(height: 20),
                                 _phaseSwitcher(fill: true, cardsExtra: cardsExtra),
                                 AnimatedSize(
@@ -673,6 +735,7 @@ class _HomeScreenState extends State<HomeScreen> {
               const StatusDeck(),
               _hero(),
               EntranceMotion(index: 2, child: _linkDock()),
+              _clipboardCard(),
               const SizedBox(height: 20),
               _phaseSwitcher(fill: true),
               const _ActiveDownloads(),
@@ -742,6 +805,12 @@ class _HomeScreenState extends State<HomeScreen> {
                       ),
                     ),
                   ),
+                  Center(
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(maxWidth: 760),
+                      child: _clipboardCard(),
+                    ),
+                  ),
                   const SizedBox(height: 20),
                   AnimatedSize(
                     duration: homeDuration(context, const Duration(milliseconds: 380)),
@@ -782,6 +851,78 @@ class _HomeScreenState extends State<HomeScreen> {
       ),
     );
     return AuroraBackground(intensity: 0.6, child: content);
+  }
+}
+
+// ───────────── A copied link ─────────────
+
+/// "Link copied" under the link box, with Fetch and dismiss.
+class _ClipboardOffer extends StatelessWidget {
+  const _ClipboardOffer({required this.url, required this.onFetch, required this.onDismiss});
+
+  final String url;
+  final VoidCallback onFetch;
+  final VoidCallback onDismiss;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    final uri = Uri.tryParse(url);
+    final host = (uri?.host ?? '').replaceFirst(RegExp(r'^www\.'), '');
+    return Material(
+      color: scheme.primaryContainer.withValues(alpha: 0.45),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(18),
+        side: BorderSide(color: scheme.primary.withValues(alpha: 0.35)),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: onFetch,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(12, 8, 4, 8),
+          child: Row(
+            children: [
+              Icon(Icons.content_paste_go_rounded, color: scheme.primary),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Link copied',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: theme.textTheme.labelLarge?.copyWith(fontWeight: FontWeight.w800),
+                    ),
+                    Text(
+                      host.isEmpty ? url : host,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: theme.textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 6),
+              FilledButton.tonal(
+                onPressed: onFetch,
+                style: FilledButton.styleFrom(
+                  visualDensity: VisualDensity.compact,
+                  padding: const EdgeInsets.symmetric(horizontal: 14),
+                ),
+                child: const Text('Fetch'),
+              ),
+              IconButton(
+                tooltip: 'Dismiss',
+                onPressed: onDismiss,
+                icon: const Icon(Icons.close_rounded),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 }
 
@@ -1439,7 +1580,8 @@ class _TaskRow extends StatelessWidget {
     final p = task.progress;
     final files = task.option.gallery?.count;
     final line = switch (task.status) {
-      DownloadStatus.queued => 'Waiting in line',
+      DownloadStatus.queued => task.stage ?? 'Waiting in line',
+      DownloadStatus.paused => 'Paused',
       DownloadStatus.starting => 'Starting…',
       DownloadStatus.processing => task.stage ?? 'Finishing up…',
       _ => [
@@ -1484,7 +1626,14 @@ class _TaskRow extends StatelessWidget {
                 style: theme.textTheme.labelLarge?.copyWith(fontWeight: FontWeight.w700),
               ),
               const SizedBox(height: 4),
-              GradientProgressBar(value: task.status == DownloadStatus.downloading ? p : null, height: 5),
+              GradientProgressBar(
+                value: switch (task.status) {
+                  DownloadStatus.downloading => p,
+                  DownloadStatus.paused => p ?? 0,
+                  _ => null,
+                },
+                height: 5,
+              ),
               const SizedBox(height: 3),
               Text(
                 line.isEmpty ? 'Downloading…' : line,
@@ -1620,110 +1769,6 @@ class _ErrorCard extends StatelessWidget {
               ),
             ],
           ),
-        ],
-      ),
-    );
-  }
-}
-
-// ───────────── Playlists ─────────────
-
-class _PlaylistView extends StatelessWidget {
-  const _PlaylistView({super.key, required this.info, required this.onPick});
-
-  final MediaInfo info;
-  final ValueChanged<PlaylistEntry> onPick;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final scheme = theme.colorScheme;
-    final entries = info.entries.take(200).toList();
-    return HomePanel(
-      highlight: true,
-      padding: const EdgeInsets.fromLTRB(14, 16, 14, 10),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          HomeSectionTitle(
-            icon: Icons.playlist_play_rounded,
-            title: info.title,
-            subtitle: [
-              '${info.entries.length} items',
-              ?info.uploader,
-              'pick one to download',
-            ].join(' · '),
-          ),
-          const SizedBox(height: 12),
-          for (final (i, entry) in entries.indexed)
-            Padding(
-              padding: const EdgeInsets.only(bottom: 6),
-              child: EntranceMotion(
-                index: i,
-                step: const Duration(milliseconds: 30),
-                offset: 10,
-                child: PressableScale(
-                  scale: 0.98,
-                  child: Material(
-                    color: scheme.surfaceContainerLowest.withValues(alpha: 0.7),
-                    borderRadius: BorderRadius.circular(16),
-                    clipBehavior: Clip.antiAlias,
-                    child: InkWell(
-                      onTap: () => onPick(entry),
-                      child: Padding(
-                        padding: const EdgeInsets.all(8),
-                        child: Row(
-                          children: [
-                            ClipRRect(
-                              borderRadius: BorderRadius.circular(11),
-                              child: SizedBox(
-                                width: 96,
-                                height: 54,
-                                child: Stack(
-                                  fit: StackFit.expand,
-                                  children: [
-                                    if (entry.thumbnail != null)
-                                      FadeInNetworkImage(
-                                        url: entry.thumbnail!,
-                                        cacheWidth: 240,
-                                        fallback: ColoredBox(color: scheme.surfaceContainerHighest),
-                                      )
-                                    else
-                                      const DecoratedBox(decoration: BoxDecoration(gradient: tileGradient)),
-                                    Positioned(left: 4, top: 4, child: OverlayPill(text: '${i + 1}')),
-                                    if (entry.duration != null)
-                                      Positioned(right: 4, bottom: 4, child: OverlayPill(text: formatDuration(entry.duration))),
-                                  ],
-                                ),
-                              ),
-                            ),
-                            const SizedBox(width: 12),
-                            Expanded(
-                              child: Text(
-                                entry.title,
-                                maxLines: 2,
-                                overflow: TextOverflow.ellipsis,
-                                style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700, height: 1.3),
-                              ),
-                            ),
-                            Icon(Icons.chevron_right_rounded, color: scheme.onSurfaceVariant),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-            ),
-          if (info.entries.length > entries.length)
-            Padding(
-              padding: const EdgeInsets.symmetric(vertical: 6),
-              child: Text(
-                'Showing the first ${entries.length}.',
-                textAlign: TextAlign.center,
-                style: theme.textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
-              ),
-            ),
         ],
       ),
     );

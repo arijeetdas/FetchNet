@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
@@ -10,14 +11,29 @@ import '../engine/engine.dart';
 import '../engine/gallery_engine.dart';
 import '../models/download_models.dart';
 import '../models/media_info.dart';
+import 'extra_settings.dart';
 import 'fetch_service.dart';
 import 'history_store.dart';
+import 'lyrics_service.dart';
 import 'storage_service.dart';
 
 /// Extra yt-dlp arguments a download gets from the user's settings.
 typedef DownloadArgsProvider = List<String> Function(MediaInfo info, DownloadOption option);
 
+/// Where the queue is kept between runs (one JSON string per task).
+class QueueStore {
+  const QueueStore({required this.load, required this.save});
+
+  final List<String> Function() load;
+  final Future<void> Function(List<String> tasks) save;
+}
+
 /// Queues and runs downloads, tracks their progress and records history.
+///
+/// The queue survives closing the app ([queueStore]): downloads that were
+/// running carry on from their partial files, paused ones stay paused.
+/// How many run at once, a speed limit and "Wi-Fi only" come from
+/// [settings].
 class DownloadManager extends ChangeNotifier {
   DownloadManager({
     required this.engine,
@@ -26,7 +42,15 @@ class DownloadManager extends ChangeNotifier {
     this.extraArgs,
     this.cookieArgs,
     this.gallery,
-  });
+    this.settings,
+    this.queueStore,
+    this.onWifi,
+    this.lyricsService,
+  }) {
+    settings?.addListener(_onSettings);
+    engine.status.addListener(_pump);
+    gallery?.status.addListener(_pump);
+  }
 
   final YtDlpEngine engine;
 
@@ -39,7 +63,26 @@ class DownloadManager extends ChangeNotifier {
   /// The browser's sign-in for a link, tried when a download is refused.
   final CookieArgsProvider? cookieArgs;
 
-  static const _maxConcurrent = 3;
+  /// Settings → Extra Settings (downloads at once, speed limit, Wi-Fi only).
+  final ExtraSettings? settings;
+  final QueueStore? queueStore;
+
+  /// Whether the device is on Wi-Fi (or another unmetered network); `null`
+  /// on platforms where it doesn't matter.
+  final Future<bool> Function()? onWifi;
+
+  /// Synced lyrics for songs (Settings → Extra Settings → Lyrics).
+  final LyricsService? lyricsService;
+
+  int get _maxConcurrent => settings?.maxConcurrent ?? 3;
+
+  /// Tasks being paused (their engine is stopping), and whether each goes
+  /// back to the queue (Wi-Fi lost) instead of staying paused.
+  final Map<String, bool> _pausing = {};
+
+  /// Last known network state, for "Wi-Fi only".
+  bool _wifiOk = true;
+  Timer? _networkTimer;
 
   /// yt-dlp extracts the page again for every download, and YouTube now and
   /// then refuses one run (403, bot check, a format briefly missing) that
@@ -64,6 +107,38 @@ class DownloadManager extends ChangeNotifier {
   Set<String> get reservedNames =>
       _tasks.where((t) => t.isActive).map((t) => t.fileBaseName.toLowerCase()).toSet();
 
+  /// Whether downloads of kinds [a] and [b] land in the same folder (a
+  /// post's files go to all of them).
+  static bool _sameFolder(MediaKind a, MediaKind b) =>
+      a == MediaKind.post || b == MediaKind.post || MediaFolder.forKind(a) == MediaFolder.forKind(b);
+
+  /// The History download that already used [name] for the folder [kind]
+  /// saves to, even if its file was deleted since (from a gallery or file
+  /// manager): reusing the name would mix the two up.
+  HistoryEntry? historyEntryNamed(String name, MediaKind kind) {
+    final wanted = name.toLowerCase();
+    for (final e in history.entries) {
+      if (e.status != DownloadStatus.completed) continue;
+      if (e.fileName.toLowerCase() == wanted && _sameFolder(e.kind, kind)) return e;
+    }
+    return null;
+  }
+
+  /// Names (lower-case) a new download of [kind] shouldn't take: queued or
+  /// running downloads, and History's downloads to the same folder.
+  Set<String> takenNames(MediaKind kind) => {
+        ...reservedNames,
+        for (final e in history.entries)
+          if (e.status == DownloadStatus.completed && _sameFolder(e.kind, kind)) e.fileName.toLowerCase(),
+      };
+
+  /// Finished downloads of [url] whose files are still on disk (the same
+  /// video saved before, maybe under another name).
+  List<HistoryEntry> savedCopiesOf(String url) => [
+        for (final e in history.entries)
+          if (e.status == DownloadStatus.completed && e.url == url && e.allFiles.any((f) => File(f).existsSync())) e,
+      ];
+
   /// History entries whose file still exists in the download folder under the
   /// name it was saved with.
   List<HistoryEntry> get completedFiles {
@@ -74,14 +149,26 @@ class DownloadManager extends ChangeNotifier {
         .toList();
   }
 
+  int _idSeq = 0;
+  String _newId() => 'dl-${DateTime.now().microsecondsSinceEpoch}-${_idSeq++}';
+
+  /// [subtitleArgs]: yt-dlp arguments for subtitles (see `subtitleArgs`).
   Future<void> enqueue({
     required MediaInfo info,
     required DownloadOption option,
     required String fileBaseName,
+    List<String> subtitleArgs = const [],
   }) async {
     await _askNotificationPermissionOnce();
+    // A song saved as audio gets its synced lyrics, when they're turned on.
+    final lyrics = settings?.lyrics == true &&
+            option.kind == MediaKind.audio &&
+            option.directUrl == null &&
+            option.gallery == null
+        ? LyricsQuery.fromInfo(info)
+        : null;
     final task = DownloadTask(
-      id: 'dl-${DateTime.now().microsecondsSinceEpoch}',
+      id: _newId(),
       url: info.url,
       title: info.title,
       fileBaseName: fileBaseName,
@@ -90,31 +177,186 @@ class DownloadManager extends ChangeNotifier {
       extraArgs: option.directUrl != null || option.gallery != null
           ? const []
           : (extraArgs?.call(info, option) ?? const []),
+      subtitleArgs: subtitleArgs,
       thumbnail: info.thumbnail,
       extractor: info.extractor,
+      lyrics: lyrics,
+      lyricsMode: lyrics == null ? null : settings!.lyricsMode.name,
     );
     _tasks.insert(0, task);
     notifyListeners();
     _pump();
   }
 
+  // ───── Pause & resume ─────
+
+  /// Stops [task] and keeps what it downloaded so far; [resume] carries on
+  /// from there.
+  Future<void> pause(DownloadTask task) => _pause(task, requeue: false);
+
+  Future<void> _pause(DownloadTask task, {required bool requeue}) async {
+    if (task.status == DownloadStatus.queued) {
+      if (requeue) return;
+      task
+        ..status = DownloadStatus.paused
+        ..stage = null;
+      notifyListeners();
+      _syncNotifications();
+      return;
+    }
+    if (!task.isRunning || _pausing.containsKey(task.id)) return;
+    _pausing[task.id] = requeue;
+    task.stage = 'Pausing…';
+    notifyListeners();
+    _direct[task.id]?.close(force: true);
+    await _runs[task.id]?.cancel();
+  }
+
+  /// Puts a paused download back in the queue.
+  void resume(DownloadTask task) {
+    if (task.status != DownloadStatus.paused) return;
+    task
+      ..status = DownloadStatus.queued
+      ..stage = null
+      ..speed = null
+      ..eta = null;
+    notifyListeners();
+    _pump();
+  }
+
+  bool get hasPausable => _tasks.any((t) => t.status == DownloadStatus.queued || t.isRunning);
+  bool get hasPaused => _tasks.any((t) => t.status == DownloadStatus.paused);
+
+  Future<void> pauseAll() async {
+    // Waiting ones first, so a freed slot doesn't start them.
+    for (final t in _tasks.where((t) => t.status == DownloadStatus.queued).toList()) {
+      await pause(t);
+    }
+    await Future.wait([for (final t in _tasks.where((t) => t.isRunning).toList()) pause(t)]);
+  }
+
+  void resumeAll() {
+    for (final t in _tasks.reversed.where((t) => t.status == DownloadStatus.paused).toList()) {
+      t
+        ..status = DownloadStatus.queued
+        ..stage = null;
+    }
+    notifyListeners();
+    _pump();
+  }
+
+  /// A paused task whose engine has stopped: kept with its partial files.
+  void _settlePause(DownloadTask task) {
+    final requeue = _pausing.remove(task.id) ?? false;
+    task
+      ..status = requeue ? DownloadStatus.queued : DownloadStatus.paused
+      ..stage = null
+      ..speed = null
+      ..eta = null;
+    _syncNotifications();
+  }
+
+  // ───── The saved queue ─────
+
+  /// Loads the queue saved by the last run. Running downloads restart from
+  /// their partial files (yt-dlp continues `.part` files); work folders of
+  /// downloads no longer in the queue are deleted.
+  Future<void> restore() async {
+    final store = queueStore;
+    if (store == null) return;
+    final restored = <DownloadTask>[];
+    for (final s in store.load()) {
+      try {
+        final t = DownloadTask.fromJson((jsonDecode(s) as Map).cast<String, dynamic>());
+        if (t != null && !_tasks.any((x) => x.id == t.id)) restored.add(t);
+      } catch (_) {}
+    }
+    _tasks.addAll(restored);
+    try {
+      final parts = await storage.workDir('parts');
+      final keep = {for (final t in _tasks) t.id};
+      for (final d in parts.listSync().whereType<Directory>()) {
+        if (!keep.contains(p.basename(d.path))) unawaited(_cleanup(d));
+      }
+    } catch (_) {}
+    if (settings?.wifiOnly == true) await _checkNetwork();
+    notifyListeners();
+    _pump();
+  }
+
+  String _savedSignature = '';
+
+  /// Saves the queue when a task was added, removed or changed state
+  /// (progress alone doesn't count).
+  void _saveQueue() {
+    final store = queueStore;
+    if (store == null) return;
+    final unfinished = _tasks.where((t) => t.isActive || t.status == DownloadStatus.failed).toList();
+    final signature = [
+      for (final t in unfinished) '${t.id}:${t.isRunning ? 'run' : t.status.name}:${t.subtitleArgs.length}',
+    ].join(',');
+    if (signature == _savedSignature) return;
+    _savedSignature = signature;
+    unawaited(store.save([for (final t in unfinished) jsonEncode(t.toJson())]));
+  }
+
+  @override
+  void notifyListeners() {
+    super.notifyListeners();
+    _saveQueue();
+  }
+
+  // ───── Settings & network ─────
+
+  void _onSettings() {
+    if (settings?.wifiOnly == true) unawaited(_checkNetwork());
+    _pump();
+    notifyListeners();
+  }
+
+  Future<void> _checkNetwork() async {
+    final check = onWifi;
+    final ok = check == null ? true : await check().catchError((_) => true);
+    if (ok == _wifiOk) return;
+    _wifiOk = ok;
+    _pump();
+    notifyListeners();
+  }
+
+  bool get _waitingForWifi => settings?.wifiOnly == true && !_wifiOk;
+
+  /// Keeps an eye on the network while downloads wait for Wi-Fi, or run
+  /// with "Wi-Fi only" on (to pause them when Wi-Fi is lost).
+  void _watchNetwork() {
+    final watch = settings?.wifiOnly == true && onWifi != null && _tasks.any((t) => t.status == DownloadStatus.queued || t.isRunning);
+    if (watch) {
+      _networkTimer ??= Timer.periodic(const Duration(seconds: 8), (_) => _checkNetwork());
+    } else {
+      _networkTimer?.cancel();
+      _networkTimer = null;
+    }
+  }
+
   Future<void> retry(DownloadTask failed) async {
     _tasks.remove(failed);
     final task = DownloadTask(
-      id: 'dl-${DateTime.now().microsecondsSinceEpoch}',
+      id: _newId(),
       url: failed.url,
       title: failed.title,
       fileBaseName: storage.uniqueBaseName(
         failed.fileBaseName,
-        alsoTaken: reservedNames,
+        alsoTaken: takenNames(failed.option.kind),
         kind: failed.option.kind,
         folders: failed.option.kind == MediaKind.post,
       ),
       option: failed.option,
       requestArgs: failed.requestArgs,
       extraArgs: failed.extraArgs,
+      subtitleArgs: failed.subtitleArgs,
       thumbnail: failed.thumbnail,
       extractor: failed.extractor,
+      lyrics: failed.lyrics,
+      lyricsMode: failed.lyricsMode,
     );
     _tasks.insert(0, task);
     notifyListeners();
@@ -127,13 +369,18 @@ class DownloadManager extends ChangeNotifier {
   }
 
   Future<void> cancel(DownloadTask task) async {
-    if (task.status == DownloadStatus.queued) {
+    if (task.status == DownloadStatus.queued || task.status == DownloadStatus.paused) {
       task.status = DownloadStatus.cancelled;
       _tasks.remove(task);
       await _record(task);
       _finishNotification(task);
+      unawaited(storage.workDir('parts/${task.id}').then(_cleanup));
       notifyListeners();
       return;
+    }
+    if (_pausing.containsKey(task.id)) {
+      // Pausing and now cancelled: it ends as cancelled.
+      _pausing.remove(task.id);
     }
     task.stage = 'Cancelling…';
     notifyListeners();
@@ -174,19 +421,44 @@ class DownloadManager extends ChangeNotifier {
     await NativeBridge.requestPermission('notifications');
   }
 
+  /// Why a queued task isn't starting yet, or `null` when it can.
+  String? _holdReason(DownloadTask task) {
+    if (_waitingForWifi) return 'Waiting for Wi-Fi';
+    if (task.option.directUrl != null) return null;
+    if (task.option.gallery != null) {
+      final g = gallery;
+      if (g != null && g.isSupported && !g.status.value.isReady) return 'Waiting for gallery-dl…';
+      return null;
+    }
+    if (engine.isSupported && !engine.status.value.isReady) return 'Waiting for yt-dlp…';
+    return null;
+  }
+
   void _pump() {
-    final running = _tasks.where((t) =>
-        t.status == DownloadStatus.starting ||
-        t.status == DownloadStatus.downloading ||
-        t.status == DownloadStatus.processing);
-    var slots = _maxConcurrent - running.length;
+    // "Wi-Fi only" and Wi-Fi was lost: running downloads go back to the
+    // queue (keeping their partial files) until it's back.
+    if (_waitingForWifi) {
+      for (final t in _tasks.where((t) => t.isRunning).toList()) {
+        unawaited(_pause(t, requeue: true));
+      }
+    }
+    final running = _tasks.where((t) => t.isRunning).length;
+    var slots = _maxConcurrent - running;
+    var changed = false;
     // Oldest first.
     for (final task in _tasks.reversed.toList()) {
-      if (slots <= 0) break;
       if (task.status != DownloadStatus.queued) continue;
+      final hold = _holdReason(task);
+      if (task.stage != hold) {
+        task.stage = hold;
+        changed = true;
+      }
+      if (hold != null || slots <= 0) continue;
       slots--;
       unawaited(_run(task));
     }
+    _watchNetwork();
+    if (changed) notifyListeners();
     _syncNotifications();
   }
 
@@ -194,6 +466,19 @@ class DownloadManager extends ChangeNotifier {
     task.status = DownloadStatus.starting;
     task.stage = 'Starting…';
     notifyListeners();
+
+    // "Wi-Fi only": check the network now rather than trusting the last look.
+    if (settings?.wifiOnly == true && onWifi != null) {
+      await _checkNetwork();
+      if (_waitingForWifi) {
+        task
+          ..status = DownloadStatus.queued
+          ..stage = 'Waiting for Wi-Fi';
+        notifyListeners();
+        _watchNetwork();
+        return;
+      }
+    }
 
     final root = storage.downloadDir ?? await storage.ensureDownloadDir(requestPermission: true);
     if (root == null) {
@@ -219,6 +504,38 @@ class DownloadManager extends ChangeNotifier {
     var extra = task.extraArgs;
     var retriesLeft = _autoRetries;
 
+    // A song: its synced lyrics, looked up before downloading so FFmpeg can
+    // write them into the file while it adds the other tags.
+    String? lrc;
+    var lyricsArgs = const <String>[];
+    final lyrics = task.lyrics;
+    if (lyrics != null && lyricsService != null) {
+      task.stage = 'Looking up lyrics…';
+      notifyListeners();
+      try {
+        lrc = await lyricsService!.synced(lyrics).timeout(const Duration(seconds: 25));
+      } catch (_) {}
+      if (_pausing.containsKey(task.id)) {
+        _settlePause(task);
+        notifyListeners();
+        _pump();
+        return;
+      }
+      if (task.stage == 'Cancelling…') {
+        task.status = DownloadStatus.cancelled;
+        _tasks.remove(task);
+        await _record(task);
+        _finishNotification(task);
+        notifyListeners();
+        _pump();
+        return;
+      }
+      if (lrc != null && task.lyricsMode != SubtitleMode.file.name && engine.status.value.ffmpegAvailable) {
+        lyricsArgs = lyricsEmbedArgs(lrc, formatArgs: task.option.formatArgs);
+      }
+      task.stage = 'Starting…';
+    }
+
     void resetProgress(String stage) {
       task
         ..status = DownloadStatus.starting
@@ -235,12 +552,34 @@ class DownloadManager extends ChangeNotifier {
     }
 
     while (true) {
-      final result = await _runYtDlp(task, dir, temp, extra);
+      final result = await _runYtDlp(task, dir, temp, [...extra, ...lyricsArgs]);
+      // Paused: the partial files stay in the work folder for later.
+      if (_pausing.containsKey(task.id)) {
+        _settlePause(task);
+        notifyListeners();
+        _pump();
+        return;
+      }
       if (!result.ok && !result.cancelled && task.stage != 'Cancelling…') {
         final raw = result.stderr.isEmpty ? result.stdout : result.stderr;
+        final lower = raw.toLowerCase();
+        // Subtitles are extra: when the site refuses them (often a 429 on
+        // automatic captions), the video downloads without them.
+        if (task.subtitleArgs.isNotEmpty && lower.contains('subtitle')) {
+          task.subtitleArgs = const [];
+          resetProgress('Retrying without subtitles…');
+          continue;
+        }
+        // Lyrics inside the song are extra too: when writing the tags fails,
+        // they're saved as a .lrc file next to it instead.
+        if (lyricsArgs.isNotEmpty && (lower.contains('metadata') || lower.contains('postprocess'))) {
+          lyricsArgs = const [];
+          resetProgress('Retrying without lyrics inside…');
+          continue;
+        }
         // Cover art is a nice-to-have: when embedding it fails (a format or
         // platform without support), the download runs once more without it.
-        if (extra.isNotEmpty && raw.toLowerCase().contains('thumbnail')) {
+        if (extra.isNotEmpty && lower.contains('thumbnail')) {
           extra = const [];
           resetProgress('Retrying without cover art…');
           continue;
@@ -251,6 +590,12 @@ class DownloadManager extends ChangeNotifier {
           resetProgress('Retrying…');
           await _addCookiesIfRefused(task, message);
           await Future<void>.delayed(Duration(seconds: 2 * (_autoRetries - retriesLeft)));
+          if (_pausing.containsKey(task.id)) {
+            _settlePause(task);
+            notifyListeners();
+            _pump();
+            return;
+          }
           if (task.stage != 'Cancelling…') continue;
         }
       }
@@ -261,6 +606,9 @@ class DownloadManager extends ChangeNotifier {
         await _record(task);
         _finishNotification(task);
       } else if (result.ok) {
+        // The .lrc file goes next to the song before it's reported done.
+        final keepFile = task.lyricsMode != SubtitleMode.embed.name || lyricsArgs.isEmpty;
+        if (lrc != null && keepFile) task.lyricsFile = lrc;
         await _complete(task, dir);
       } else {
         final message = extractEngineError(result.stderr.isEmpty ? result.stdout : result.stderr);
@@ -270,6 +618,16 @@ class DownloadManager extends ChangeNotifier {
     }
     notifyListeners();
     _pump();
+  }
+
+  /// Saves synced lyrics next to [audioPath] (`Song.mp3` → `Song.lrc`), where
+  /// music players look for them.
+  Future<void> _writeLyricsFile(String audioPath, String lrc) async {
+    try {
+      final path = p.setExtension(audioPath, '.lrc');
+      await File(path).writeAsString(lrc);
+      await NativeBridge.scanFile(path);
+    } catch (_) {}
   }
 
   /// A sign-in / bot check or a refused request: retry with the browser's
@@ -289,10 +647,13 @@ class DownloadManager extends ChangeNotifier {
   }
 
   Future<EngineResult> _runYtDlp(DownloadTask task, String dir, Directory temp, List<String> extra) async {
+    final rate = settings?.rateArg;
     final args = <String>[
       ...task.option.formatArgs,
       ...extra,
+      ...task.subtitleArgs,
       ...task.requestArgs,
+      if (rate != null) ...['--limit-rate', rate],
       '--no-playlist',
       '--no-mtime',
       '--newline',
@@ -357,7 +718,7 @@ class DownloadManager extends ChangeNotifier {
       } finally {
         await sink.close();
       }
-      if (task.stage == 'Cancelling…') throw const HttpException('Cancelled');
+      if (task.stage == 'Cancelling…' || _pausing.containsKey(task.id)) throw const HttpException('Cancelled');
       final target = File(path);
       if (target.existsSync()) target.deleteSync();
       part.renameSync(path);
@@ -367,7 +728,13 @@ class DownloadManager extends ChangeNotifier {
       try {
         if (part.existsSync()) part.deleteSync();
       } catch (_) {}
-      if (task.stage == 'Cancelling…') {
+      if (_pausing.containsKey(task.id)) {
+        // A single picture: resuming simply downloads it again.
+        _settlePause(task);
+        task
+          ..progress = null
+          ..downloadedBytes = null;
+      } else if (task.stage == 'Cancelling…') {
         task.status = DownloadStatus.cancelled;
         _tasks.remove(task);
         await _record(task);
@@ -406,9 +773,11 @@ class DownloadManager extends ChangeNotifier {
     showProgress();
     notifyListeners();
     while (true) {
+      final rate = settings?.rateArg;
       final args = <String>[
         '-D', temp.path,
         if (g.range != null) ...['--range', g.range!],
+        if (rate != null) ...['--limit-rate', rate],
         // One line per saved (or already saved) file drives the progress.
         '--Print', 'after:FNFILE|{filename}.{extension}',
         '--Print', 'skip:FNFILE|{filename}.{extension}',
@@ -429,6 +798,11 @@ class DownloadManager extends ChangeNotifier {
       await sub.cancel();
       _runs.remove(task.id);
 
+      // Paused: gallery-dl skips the files it already saved when resumed.
+      if (_pausing.containsKey(task.id)) {
+        _settlePause(task);
+        return;
+      }
       final saved = _savedFiles(temp);
       if (result.cancelled || task.stage == 'Cancelling…') {
         task.status = DownloadStatus.cancelled;
@@ -454,6 +828,10 @@ class DownloadManager extends ChangeNotifier {
         _syncNotifications();
         await _addCookiesIfRefused(task, message, refused: GalleryExit.has(result.exitCode, GalleryExit.auth));
         await Future<void>.delayed(Duration(seconds: 2 * (_autoRetries - retriesLeft)));
+        if (_pausing.containsKey(task.id)) {
+          _settlePause(task);
+          return;
+        }
         if (task.stage != 'Cancelling…') {
           showProgress();
           continue;
@@ -624,6 +1002,11 @@ class DownloadManager extends ChangeNotifier {
     task.status = DownloadStatus.completed;
     task.progress = 1;
     await NativeBridge.scanFile(path);
+    final lrc = task.lyricsFile;
+    if (lrc != null) {
+      task.lyricsFile = null;
+      await _writeLyricsFile(path, lrc);
+    }
     _tasks.remove(task);
     await _record(task);
     _finishNotification(task);
@@ -712,7 +1095,8 @@ class DownloadManager extends ChangeNotifier {
       }
       _lastNotified[t.id] = (now, key);
       final text = switch (t.status) {
-        DownloadStatus.queued => 'Waiting in queue',
+        DownloadStatus.queued => t.stage ?? 'Waiting in queue',
+        DownloadStatus.paused => 'Paused',
         DownloadStatus.downloading => [
             if (known) '$pct%',
             formatSpeed(t.speed),
@@ -782,6 +1166,10 @@ class DownloadManager extends ChangeNotifier {
   @override
   void dispose() {
     _notifyTimer?.cancel();
+    _networkTimer?.cancel();
+    settings?.removeListener(_onSettings);
+    engine.status.removeListener(_pump);
+    gallery?.status.removeListener(_pump);
     super.dispose();
   }
 }

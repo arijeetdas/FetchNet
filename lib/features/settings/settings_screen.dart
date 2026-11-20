@@ -19,6 +19,7 @@ import '../shell/whats_new_dialog.dart';
 import '../youtube/youtube_settings_screen.dart';
 import 'about_dialog.dart';
 import 'engines_screen.dart';
+import 'extra_settings_section.dart';
 import 'settings_widgets.dart';
 
 const fetchNetRepo = 'https://git-fetchnet.arijeet.in';
@@ -229,6 +230,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
               },
             ),
 
+            // ───── Extra Settings ─────
+            // Subtitles, quick download presets, download limits, copied links.
+            const SectionLabel('Extra Settings'),
+            const ExtraSettingsCards(),
+
             // ───── Engines ─────
             // Versions, updates, links and credits live on the Engines
             // screen; the switches and add-ons stay here.
@@ -412,13 +418,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
           SliverToBoxAdapter(
             child: LayoutBuilder(
               builder: (context, c) {
-                // Banner and animation | Appearance, Downloads, YouTube |
-                // Engines, About | footer.
-                assert(children.length == 14, 'Update the column split below');
+                // Banner and animation | Appearance, Downloads, YouTube,
+                // Engines | Extra Settings, About | footer.
+                assert(children.length == 16, 'Update the column split below');
                 final top = children.sublist(0, 2);
-                final left = children.sublist(2, 8);
-                final right = children.sublist(8, 12);
-                final footer = children.sublist(12);
+                final left = [...children.sublist(2, 8), ...children.sublist(10, 12)];
+                final right = [...children.sublist(8, 10), ...children.sublist(12, 14)];
+                final footer = children.sublist(14);
                 if (c.maxWidth < 900) return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: children);
                 return Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,

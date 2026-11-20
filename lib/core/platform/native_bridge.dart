@@ -70,6 +70,28 @@ class NativeBridge {
     return launchUrl(Uri.file(path));
   }
 
+  /// Lets the user pick another app for a downloaded file: Android's app
+  /// chooser, Windows' "How do you want to open this file?" dialog; other
+  /// systems open their default app.
+  static Future<bool> openWith(String path) async {
+    if (kIsWeb) return false;
+    if (_isAndroid) return openFile(path);
+    if (Platform.isWindows) {
+      try {
+        // The dialog belongs to FetchNet's window (windows/runner), so it
+        // shows in front of it; the runner opens the default app when it
+        // can't.
+        return await _windows.invokeMethod<bool>('openWith', {'path': path}) ?? false;
+      } catch (_) {
+        // An older runner without the channel: the default app.
+        return launchUrl(Uri.file(path));
+      }
+    }
+    return launchUrl(Uri.file(path));
+  }
+
+  static const MethodChannel _windows = MethodChannel('fetchnet/windows');
+
   /// Whether the OS has a share sheet FetchNet can open (Android).
   static bool get canShareNatively => _isAndroid;
 
@@ -221,6 +243,18 @@ class NativeBridge {
       final m = (e as Map).cast<Object?, Object?>();
       return {'action': m['action']?.toString(), 'id': m['id']?.toString()};
     });
+  }
+
+  /// Whether the phone is on Wi-Fi, Ethernet or another network that isn't
+  /// mobile data ("Wi-Fi only" downloads). `true` off Android and when
+  /// unknown, so downloads never wait for nothing.
+  static Future<bool> isOnWifi() async {
+    if (!_isAndroid) return true;
+    try {
+      return await _channel.invokeMethod<bool>('isOnWifi') ?? true;
+    } catch (_) {
+      return true;
+    }
   }
 
   /// `open_downloads` when the app was launched from a download notification.

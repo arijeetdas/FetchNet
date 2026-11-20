@@ -18,6 +18,86 @@ Versions follow `version: <name>+<build>` in `pubspec.yaml`.
 
 ---
 
+## 🚀 v1.3.0 — 2026-11-20
+
+> **Build 7** · Whole playlists and channels, subtitles, pause and resume, and Extra Settings.
+
+### ✨ Highlights
+
+- 📚 **Whole playlists and channels**: pick videos from the list, up to 10 at a time, and download them in one go.
+- ⏯️ **Pause and resume** downloads; the queue carries on when you open FetchNet again.
+- 💬 **Subtitles** download with videos, on sites that have them.
+
+### 🆕 New
+
+#### 📚 Playlists and channels
+
+- 📃 A playlist or channel lists its videos **10 at a time**; **Load 10 more** reads the next ones, so channels with thousands of videos stay quick.
+- ☑️ Pick **up to 10 videos at once** (or tap **Pick 10**), then **Download** them as video or audio in your quick download preset's quality. The total size (estimated from the videos' length) shows under the button.
+- ℹ️ The **ⓘ** button of a video opens its details: preview, every quality and format, subtitles and tags.
+- ✅ Videos you already downloaded say **Saved**. A channel's **Videos**, **Shorts** and **Live** open as lists of their own.
+
+#### ⏯️ Downloads
+
+- ⏸️ **Pause** and **Resume** each download, or **Pause all** / **Resume all** on the Downloads tab. A paused download keeps what it downloaded and carries on from there.
+- 💾 The queue **survives closing the app**: downloads that were running carry on when FetchNet opens again, paused ones stay paused.
+
+#### ▶️ Video player
+
+- 🎬 **Downloaded videos play in FetchNet**: tap one in Downloads or History. Play / pause, **double-tap the sides to skip** (5, 10, 15 or 30 seconds), and **hold for 2× speed**. Tap anywhere to show or hide the controls.
+- 🎚️ **Smooth seeking**: the picture follows the seek bar while you drag it (with the time in big), then lands exactly where you let go.
+- 🎞️ **Smooth playback**: nothing redraws over the video while it plays (hidden controls stay still), so the picture doesn't stutter.
+- 🎛️ A **modern ⋮ panel**: speed in one tap, quick tiles for subtitles, picture, double-tap, loop, mini player and file info, and **Open with**.
+- 💬 **Subtitles**: the ones FetchNet put inside the video or saved next to it show by themselves; pick another, a file from the same folder, or turn them off, and choose their size.
+- ⚙️ **Playback speed** (0.25× to 3×), **picture** (fit, fill or stretch), **loop**, the **audio track**, **file info**, and it **resumes where you stopped**.
+- 📱 Landscape videos turn the phone sideways (with a rotate button); **picture-in-picture** on Android. On a computer: **full screen**, volume, and keyboard shortcuts (space, ← →, ↑ ↓, F, M, Esc).
+- ↗️ **Open with** in its ⋮ menu plays the video in another app.
+
+#### 🎵 Music player
+
+- 🎧 **Downloaded songs and audio play in FetchNet**: tap one in Downloads or History.
+- 🖼️ The **album art**, or for a YouTube download its **thumbnail**, fills the screen, and the background and buttons take on the cover's colours. Without one, a music icon on FetchNet's background (light or dark, like the app).
+- 🎤 **Synced lyrics** follow the song, with the line being sung highlighted; tap a line to jump there. They come from the song itself or a `.lrc` file next to it, and plain lyrics show as text. On a computer the lyrics sit beside the cover.
+- ⏪ **Back and forward 5, 10, 15 or 30 seconds** instead of previous / next, a smooth seek bar, **speed**, **loop**, a **sleep timer** (or stop at the end of the song), **file info** and **Open with**.
+- 💾 Long audio (podcasts, mixes) **resumes where you stopped**. Keyboard: space, ← →, ↑ ↓, Y (lyrics), Esc.
+
+#### ↗️ Open with
+
+- 📂 The file menu's **Open** is now **Open with**: any downloaded file in another app (Android's app chooser; Windows' "How do you want to open this file?"). Tapping a file opens songs and videos in FetchNet's players and pictures in its viewer; other files go to **Open with**.
+
+#### 🌐 Browser Mode
+
+- 🛡️ **Ads, trackers and pop-ups are blocked** on the sites you open: ad networks, trackers and the pop-up networks streaming sites use. A site's own pop-ups open in place; others are blocked (**Open** shows one anyway). Turn it off in the menu or Settings → Extra Settings.
+- 📥 **Works like a download manager's browser**: when a page starts a download, videos, audio, pictures and subtitles go to FetchNet's downloads, and links to video, audio and subtitle files download instead of opening. Anything else says **File not supported**, with **Open in browser**.
+- 🔎 **Finds more media**, also inside embedded players (sites like 9anime): the requests a page makes, its players' playlists (JW Player, Video.js) and its **subtitles**, now a section of **Media found**.
+- 👆 **Long-press** (right-click on a computer) a picture, video, audio or link: **Download**, **Open link** or **Copy link**, for anything FetchNet didn't find by itself.
+
+#### 📋 Copied links
+
+- 📋 Come back to FetchNet with a link copied, and Home offers it under the link box: **Fetch** in one tap. Each link is offered once.
+
+#### ⚙️ Extra Settings
+
+- 💬 **Download subtitles**: pick the **Format** (SRT, VTT, ASS or the site's own) and **Languages** (and automatic captions), and **Merge into the video** (a subtitle track in sync with the video, optionally keeping the files too) or keep them as separate files. Each video's subtitles can be changed before downloading it.
+- 🎤 **Add lyrics to music**: songs saved as audio get their **synced lyrics** (from LRCLIB), put inside the song (MP3, M4A, Opus) so music players show each line as it's sung, and/or saved as a **.lrc** file next to it.
+- ⚡ **Quick download presets**: the video quality and audio format picked first, and used for playlists and channels.
+- 🧮 **Downloads at once** (1 to 10; the rest wait in the queue) and a **speed limit** for each download.
+- 📶 **Wi-Fi only**: downloads wait while you're on mobile data.
+- 📋 **Detect copied links** can be turned off.
+
+### 🛠️ Improved
+
+- 🖼️ **A better picture viewer**: the picture's name and size at the top, tap to hide the controls, thumbnails to jump between pictures, arrow keys and Esc on a computer. Saved pictures open in it from Downloads, with **Share**.
+- 🏷️ **Name your file** says straight away when the name is taken, and suggests a free one: a file with that name in the folder, a download in the queue, or a download in History, even one whose file was deleted from a gallery or file manager.
+- 🔁 It also says when you already saved the same video (or song, picture...) under another name, and offers to **Download again**.
+
+### 🧰 Under the hood
+
+- 🔁 When a site refuses subtitles, the video downloads without them instead of failing.
+- ⏳ Downloads wait for yt-dlp or gallery-dl to finish setting up instead of failing.
+
+---
+
 ## 🚀 v1.2.6 — 2026-11-20
 
 > **Build 6** · A roomier FetchNet on large screens, and Windows closes properly.

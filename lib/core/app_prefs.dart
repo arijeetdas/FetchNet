@@ -9,6 +9,15 @@ class AppPrefs {
 
   static Future<AppPrefs> load() async => AppPrefs._(await SharedPreferences.getInstance());
 
+  /// The store itself, for settings kept by their own class (ExtraSettings).
+  SharedPreferences get store => _prefs;
+
+  static const _kDownloadQueue = 'downloads.queue';
+
+  /// Unfinished downloads, one JSON object each (see DownloadTask.toJson).
+  List<String> get downloadQueue => _prefs.getStringList(_kDownloadQueue) ?? const [];
+  Future<void> setDownloadQueue(List<String> value) => _prefs.setStringList(_kDownloadQueue, value);
+
   static const _kWelcomeSeen = 'onboarding.welcome_seen';
   static const _kDisclaimerAccepted = 'onboarding.disclaimer_accepted';
   static const _kDisclaimerAcceptedAt = 'onboarding.disclaimer_accepted_at';

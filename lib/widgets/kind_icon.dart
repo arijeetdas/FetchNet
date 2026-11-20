@@ -9,4 +9,5 @@ IconData kindIcon(MediaKind kind) => switch (kind) {
       MediaKind.thumbnail => Icons.image_rounded,
       MediaKind.image => Icons.photo_rounded,
       MediaKind.post => Icons.photo_library_rounded,
+      MediaKind.subtitle => Icons.closed_caption_rounded,
     };

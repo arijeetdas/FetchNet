@@ -100,6 +100,11 @@ void main() {
       expect(find.text('Pick a quality'), findsOneWidget);
       expect(find.text('2160p'), findsOneWidget);
       expect(find.text('4K'), findsOneWidget);
+      // The quick download preset (1080p by default) is picked first.
+      expect(find.textContaining('Download 1080p'), findsOneWidget);
+      // "Best available" picks the highest.
+      await services.extras.setPresetVideoHeight(0);
+      await tester.pump(const Duration(milliseconds: 300));
       expect(find.textContaining('Download 2160p'), findsOneWidget);
 
       // Picking another card updates the button.

@@ -30,20 +30,27 @@ class FetchService {
   int _generation = 0;
   int _seq = 0;
 
+  /// Entries of a playlist or channel listed at a time: a channel can have
+  /// thousands of videos, read page by page ("Load more").
+  static const playlistPageSize = 10;
+
   /// Fetches anonymously first. When that fails and the browser holds a
   /// sign-in for the site, tries once more with its cookies (age-restricted,
   /// private or bot-checked media).
-  Future<MediaInfo> fetch(String url, {List<String> requestArgs = const []}) async {
+  ///
+  /// A playlist or channel lists [playlistPageSize] entries, from entry
+  /// [playlistStart] (1-based).
+  Future<MediaInfo> fetch(String url, {List<String> requestArgs = const [], int playlistStart = 1}) async {
     final generation = _generation;
     try {
-      return await _fetchOnce(url, requestArgs);
+      return await _fetchOnce(url, requestArgs, playlistStart);
     } on FetchException catch (e) {
       final provider = cookieArgs;
       if (e.cancelled || provider == null || requestArgs.contains('--cookies') || !_worthRetrying(e.message)) rethrow;
       final extra = await provider(url);
       if (generation != _generation) throw FetchException('Cancelled', cancelled: true);
       if (extra.isEmpty) rethrow;
-      return _fetchOnce(url, [...requestArgs, ...extra]);
+      return _fetchOnce(url, [...requestArgs, ...extra], playlistStart);
     }
   }
 
@@ -56,13 +63,15 @@ class FetchService {
         m.contains('is not a valid url'));
   }
 
-  Future<MediaInfo> _fetchOnce(String url, List<String> requestArgs) async {
+  Future<MediaInfo> _fetchOnce(String url, List<String> requestArgs, int playlistStart) async {
     final id = 'info-${DateTime.now().microsecondsSinceEpoch}-${_seq++}';
     _running.add(id);
     final result = await _engine.run([
       '-J',
       '--no-playlist',
       '--flat-playlist',
+      // Only this page of a playlist / channel (ignored for one video).
+      '--playlist-items', '$playlistStart:${playlistStart + playlistPageSize - 1}',
       '--no-warnings',
       ...requestArgs,
       '--',

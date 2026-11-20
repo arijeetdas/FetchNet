@@ -1,9 +1,11 @@
 import 'dart:async';
+import 'dart:collection';
 import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 
 import '../../core/app_services.dart';
@@ -16,7 +18,10 @@ import '../../widgets/brand.dart';
 import '../home/rename_dialog.dart';
 import '../home/sites_panel.dart';
 import '../youtube/youtube_screen.dart';
+import 'ad_blocker.dart';
+import 'browser_files.dart';
 import 'media_sniffer.dart';
+import 'page_hooks.dart';
 
 /// What Browser Mode hands back to Home.
 class BrowserGrab {
@@ -107,18 +112,65 @@ class _BrowserScreenState extends State<BrowserScreen> {
 
   String get _startUrl => widget.initialUrl ?? 'https://www.google.com';
 
-  /// Lets Android load everything except YouTube pages without a round trip
-  /// to Dart (which would turn form posts into GETs).
-  static const _notYouTube = r'(?i)^(?!https?://(www\.|m\.)?(youtube\.com|youtu\.be)([/?#:]|$)).*$';
+  /// Settings → Extra Settings → Block ads and trackers (also in the menu).
+  late bool _blockAds = AppScope.of(context).extras.blockAds;
 
-  bool get _interceptsNavigation => widget.youtubeHandoff && !kIsWeb && Platform.isAndroid;
+  /// Ads, trackers and pop-ups blocked on this visit (where they can be
+  /// counted: pop-ups, ad pages, and every request on Windows).
+  final ValueNotifier<int> _blocked = ValueNotifier(0);
+  DateTime _lastBlockNotice = DateTime.fromMillisecondsSinceEpoch(0);
+
+  static bool get _isAndroid => !kIsWeb && Platform.isAndroid;
+  static bool get _isWindows => !kIsWeb && Platform.isWindows;
+
+  /// Windows has no content blockers: every request passes through Dart,
+  /// which blocks ads and sees the media embedded players load.
+  static bool get _interceptsRequests => _isWindows;
+
+  /// Android loads most pages without a round trip to Dart (which would
+  /// turn form posts into GETs). Only YouTube (handed off), ad pages
+  /// (stopped) and links to media files (downloaded) are asked about.
+  String _syncNavigationRegex() {
+    final hosts = <String>[
+      if (widget.youtubeHandoff) r'(?:www\.|m\.)?(?:youtube\.com|youtu\.be)',
+      if (_blockAds) '(?:[^/?#]*\\.)?${AdBlocker.hostAlternation()}',
+    ];
+    final hostRule = hosts.isEmpty ? '' : '(?!https?://(?:${hosts.join('|')})(?:[/?#:]|\$))';
+    const mediaRule =
+        r'(?!.*\.(?:mp4|m4v|webm|mov|mkv|flv|3gp|mp3|m4a|aac|oga|ogg|opus|flac|wav|srt|vtt|ass|ssa|m3u8|mpd)(?:[?#]|$))';
+    return '(?i)^$hostRule$mediaRule.*\$';
+  }
 
   InAppWebViewSettings _settings() => WebSession.baseSettings(desktop: _desktop)
     ..useOnLoadResource = true
+    ..useOnDownloadStart = true
     ..mediaPlaybackRequiresUserGesture = true
-    ..supportMultipleWindows = false
-    ..useShouldOverrideUrlLoading = _interceptsNavigation
-    ..regexToAllowSyncUrlLoading = _interceptsNavigation ? _notYouTube : null;
+    // Pop-ups come to onCreateWindow: a site's own open in place, others
+    // (ads) are blocked. Scripts can't open windows on their own.
+    ..supportMultipleWindows = true
+    ..javaScriptCanOpenWindowsAutomatically = false
+    ..useShouldOverrideUrlLoading = true
+    ..regexToAllowSyncUrlLoading = _isAndroid ? _syncNavigationRegex() : null
+    ..useShouldInterceptRequest = _interceptsRequests
+    ..contentBlockers = _blockAds && !_interceptsRequests ? AdBlocker.contentBlockers() : [];
+
+  static const _adblockGroup = 'fetchnet-adblock';
+
+  UnmodifiableListView<UserScript> _userScripts() => UnmodifiableListView([
+        UserScript(
+          source: PageHooks.script,
+          injectionTime: UserScriptInjectionTime.AT_DOCUMENT_START,
+          forMainFrameOnly: false,
+        ),
+        if (_blockAds) _cosmeticScript(),
+      ]);
+
+  UserScript _cosmeticScript() => UserScript(
+        groupName: _adblockGroup,
+        source: AdBlocker.cosmeticScript,
+        injectionTime: UserScriptInjectionTime.AT_DOCUMENT_START,
+        forMainFrameOnly: false,
+      );
 
   @override
   void initState() {
@@ -135,6 +187,7 @@ class _BrowserScreenState extends State<BrowserScreen> {
   @override
   void dispose() {
     _scanTimer?.cancel();
+    _blocked.dispose();
     _address.dispose();
     _addressFocus.dispose();
     WebSession.flush();
@@ -179,9 +232,369 @@ class _BrowserScreenState extends State<BrowserScreen> {
     if (mounted) showPinResult(context, result);
   }
 
-  void _consider(String url, {String? hint}) {
+  /// A URL the page (or a frame in it, [frame]) loads.
+  void _consider(String url, {String? hint, String? frame}) {
+    if (_blockAds && AdBlocker.isBlocked(url)) return;
     _sniffer.referer = _pageUrl;
-    _sniffer.consider(url, hint: hint);
+    _sniffer.consider(url, hint: hint, frame: frame);
+  }
+
+  // ───── Ads, trackers and pop-ups ─────
+
+  /// Counts a block; [notice] says so (at most every few seconds: pop-up
+  /// scripts fire on every tap).
+  void _noteBlocked({String? notice, String? openUrl}) {
+    _blocked.value++;
+    if (notice == null || !mounted) return;
+    final now = DateTime.now();
+    if (now.difference(_lastBlockNotice) < const Duration(seconds: 4)) return;
+    _lastBlockNotice = now;
+    showSnack(
+      context,
+      notice,
+      actionLabel: openUrl == null ? null : 'Open',
+      onAction: openUrl == null ? null : () => _controller?.loadUrl(urlRequest: URLRequest(url: WebUri(openUrl))),
+    );
+  }
+
+  /// A page asks for a new window (a link with target=_blank, window.open).
+  /// It's always handled here: a site's own pop-up opens in place; with ad
+  /// blocking on, other sites' (ads, pop-unders) are blocked.
+  Future<bool> _onCreateWindow(InAppWebViewController c, CreateWindowAction action) async {
+    final url = action.request.url?.toString();
+    if (url == null || url.isEmpty || url == 'about:blank') {
+      if (_blockAds) _noteBlocked(notice: 'Blocked a pop-up');
+      return true;
+    }
+    final otherSite = AdBlocker.siteOf(url) != AdBlocker.siteOf(_pageUrl);
+    if (_blockAds && (AdBlocker.isBlocked(url) || otherSite)) {
+      _noteBlocked(notice: 'Blocked a pop-up', openUrl: AdBlocker.isBlocked(url) ? null : url);
+      return true;
+    }
+    // Opens in place. Windows does that itself when told it isn't handled.
+    if (_isWindows) return false;
+    await c.loadUrl(urlRequest: URLRequest(url: WebUri(url)));
+    return true;
+  }
+
+  Future<void> _toggleAdBlock() async {
+    final services = AppScope.of(context);
+    setState(() => _blockAds = !_blockAds);
+    await services.extras.setBlockAds(_blockAds);
+    final c = _controller;
+    if (c == null) return;
+    await c.setSettings(settings: _settings());
+    await c.removeUserScriptsByGroupName(groupName: _adblockGroup);
+    if (_blockAds) await c.addUserScript(userScript: _cosmeticScript());
+    await c.reload();
+  }
+
+  // ───── Downloads the page starts ─────
+
+  /// Cookies, user agent and referer, so a download sees what the browser
+  /// sees.
+  Future<List<String>> _requestArgs(String mediaUrl, {String? referer}) async {
+    final services = AppScope.of(context);
+    String? ua;
+    try {
+      ua = (await _controller?.evaluateJavascript(source: 'navigator.userAgent'))?.toString();
+    } catch (_) {}
+    final cookies = await WebSession.exportCookies(
+      {_pageUrl, mediaUrl, ?referer}.toList(),
+      await services.storage.workDir('cookies'),
+    );
+    final from = referer ?? _pageUrl;
+    return [
+      if (cookies != null) ...['--cookies', cookies],
+      if (ua != null && ua.isNotEmpty) ...['--user-agent', ua],
+      if (mediaUrl != from) ...['--referer', from],
+    ];
+  }
+
+  /// Like a download manager: the WebView never downloads anything itself.
+  /// Videos, audio, pictures and subtitles go to FetchNet's downloads;
+  /// anything else is refused (with a way to open it in the browser).
+  Future<DownloadStartResponse?> _onDownloadStarting(InAppWebViewController c, DownloadStartRequest request) async {
+    final url = request.url.toString();
+    final suggested = request.suggestedFilename;
+    final name = BrowserFileType.fileNameFromDisposition(request.contentDisposition) ??
+        (suggested != null && suggested.contains('filename') ? BrowserFileType.fileNameFromDisposition(suggested) : suggested);
+    final type = BrowserFileType.detect(url: url, mime: request.mimeType, fileName: name);
+    // After the WebView has dropped its own download.
+    Future<void>.delayed(Duration.zero, () {
+      if (!mounted) return;
+      if (type == null) {
+        _unsupported(url, fileName: name);
+      } else {
+        _downloadFile(url, type, fileName: name, size: request.contentLength > 0 ? request.contentLength : null);
+      }
+    });
+    return DownloadStartResponse(handled: true, action: DownloadStartResponseAction.CANCEL);
+  }
+
+  /// Downloads [url] if it's a video, audio, picture or subtitles; it looks
+  /// at what the server sends when the URL doesn't say. Anything else gets
+  /// "File not supported".
+  Future<void> _downloadUrl(String url, {String? referer, String? title, BrowserFileType? type}) =>
+      _promptOnce(url, () => _downloadUrlNow(url, referer: referer, title: title, type: type));
+
+  Future<void> _downloadUrlNow(String url, {String? referer, String? title, BrowserFileType? type}) async {
+    var kind = type ?? BrowserFileType.detect(url: url);
+    String? fileName;
+    int? size;
+    if (kind == null) {
+      showSnack(context, 'Checking what this link is…');
+      String? cookie;
+      try {
+        cookie = await WebSession.cookieHeader([url]);
+      } catch (_) {}
+      final head = await _sniffer.probe(url, headers: {
+        'Referer': referer ?? _pageUrl,
+        if (cookie != null && cookie.isNotEmpty) 'Cookie': cookie,
+      });
+      fileName = BrowserFileType.fileNameFromDisposition(head?.disposition);
+      size = head?.length;
+      kind = BrowserFileType.detect(url: url, mime: head?.contentType, fileName: fileName);
+    }
+    if (!mounted) return;
+    // Already inside _promptOnce: the prompts themselves, not their guards.
+    if (kind == null) {
+      await showUnsupportedFileDialog(context, url: url, fileName: fileName);
+      return;
+    }
+    await _downloadFileNow(url, kind, fileName: fileName ?? title, size: size, referer: referer);
+  }
+
+  // One click can reach here more than once: the link (stopped and
+  // offered as a download) and the page's own download for it, or a
+  // download address that redirects to the file's. Only one prompt shows.
+  bool _prompting = false;
+  String? _lastPromptUrl;
+  DateTime _lastPromptAt = DateTime.fromMillisecondsSinceEpoch(0);
+
+  static String _promptKey(String url) => url.split('#').first;
+
+  /// Runs [prompt] unless a download prompt is already open, or [url] was
+  /// just offered.
+  Future<void> _promptOnce(String url, Future<void> Function() prompt) async {
+    final key = _promptKey(url);
+    final now = DateTime.now();
+    if (_prompting) return;
+    if (key == _lastPromptUrl && now.difference(_lastPromptAt) < const Duration(seconds: 4)) return;
+    _prompting = true;
+    _lastPromptUrl = key;
+    _lastPromptAt = now;
+    try {
+      await prompt();
+    } finally {
+      _prompting = false;
+      _lastPromptAt = DateTime.now();
+    }
+  }
+
+  /// [_downloadFileNow], one prompt at a time.
+  Future<void> _downloadFile(String url, BrowserFileType type, {String? fileName, int? size, String? referer}) =>
+      _promptOnce(url, () => _downloadFileNow(url, type, fileName: fileName, size: size, referer: referer));
+
+  /// "File not supported", one prompt at a time.
+  Future<void> _unsupported(String url, {String? fileName}) =>
+      _promptOnce(url, () => showUnsupportedFileDialog(context, url: url, fileName: fileName));
+
+  /// Hands one file to FetchNet's downloads: streams to yt-dlp (via Home),
+  /// video and audio to yt-dlp with the browser's cookies (resumable),
+  /// pictures and subtitles straight from their URL.
+  Future<void> _downloadFileNow(String url, BrowserFileType type, {String? fileName, int? size, String? referer}) async {
+    if (type == BrowserFileType.stream) {
+      await _grab(url, referer: referer);
+      return;
+    }
+    final services = AppScope.of(context);
+    if (services.storage.downloadDir == null) {
+      await services.storage.ensureDownloadDir(requestPermission: true);
+      if (!mounted) return;
+      if (services.storage.downloadDir == null) {
+        showSnack(context, services.storage.error ?? 'The download folder isn\'t available.', kind: ToastKind.error);
+        return;
+      }
+    }
+    final from = referer ?? _pageUrl;
+    final urlExt = BrowserFileType.extensionOf(fileName) ?? BrowserFileType.extensionOf(url);
+    final ext = BrowserFileType.fromExtension(urlExt) == type
+        ? (urlExt == 'jpeg' ? 'jpg' : urlExt!)
+        : switch (type) {
+            BrowserFileType.video || BrowserFileType.stream => 'mp4',
+            BrowserFileType.audio => 'm4a',
+            BrowserFileType.image => 'jpg',
+            BrowserFileType.subtitle => 'srt',
+          };
+    var title = fileName ?? '';
+    final dot = title.lastIndexOf('.');
+    if (dot > 0 && BrowserFileType.extensionOf(title) != null) title = title.substring(0, dot);
+    if (title.trim().isEmpty) title = _pageTitle ?? Uri.tryParse(_pageUrl)?.host ?? 'Download';
+    final host = Uri.tryParse(_pageUrl)?.host;
+    final label = switch (type) {
+      BrowserFileType.video || BrowserFileType.stream => 'Video',
+      BrowserFileType.audio => 'Audio',
+      BrowserFileType.image => 'Image',
+      BrowserFileType.subtitle => 'Subtitles',
+    };
+    final detail = [ext.toUpperCase(), if (size != null) formatBytes(size)].join(' · ');
+
+    final MediaInfo info;
+    final DownloadOption option;
+    if (type == BrowserFileType.video || type == BrowserFileType.audio) {
+      final args = await _requestArgs(url, referer: from);
+      info = MediaInfo(url: url, title: title, raw: const {}, extractor: host, requestArgs: args);
+      option = DownloadOption(
+        kind: type.kind,
+        label: label,
+        detail: detail,
+        sizeBytes: size,
+        extension: ext,
+        // The file as the site serves it.
+        formatArgs: const [],
+      );
+    } else {
+      String? ua;
+      try {
+        ua = (await _controller?.evaluateJavascript(source: 'navigator.userAgent'))?.toString();
+      } catch (_) {}
+      final cookie = await WebSession.cookieHeader([url]);
+      info = MediaInfo(url: url, title: title, raw: const {}, thumbnail: type == BrowserFileType.image ? url : null, extractor: host);
+      option = DownloadOption(
+        kind: type.kind,
+        label: label,
+        detail: detail,
+        sizeBytes: size,
+        extension: ext,
+        formatArgs: const [],
+        directUrl: url,
+        directHeaders: {
+          'Referer': from,
+          if (ua != null && ua.isNotEmpty) 'User-Agent': ua,
+          if (cookie.isNotEmpty) 'Cookie': cookie,
+        },
+      );
+    }
+    if (!mounted) return;
+    final name = await showRenameDialog(context, info: info, option: option);
+    if (name == null || !mounted) return;
+    await services.downloads.enqueue(info: info, option: option, fileBaseName: name);
+    if (!mounted) return;
+    final navigator = Navigator.of(context, rootNavigator: true);
+    showSnack(
+      context,
+      'Downloading $name.$ext',
+      kind: ToastKind.success,
+      actionLabel: 'View',
+      onAction: () {
+        navigator.popUntil((r) => r.isFirst);
+        services.tabRequest.value = 1;
+      },
+    );
+  }
+
+  // ───── Long-press / right-click ─────
+
+  /// Long-press (or right-click) on a picture, video, audio or link: what
+  /// FetchNet can do with it.
+  void _onPress(Map<String, dynamic> e) {
+    if (!mounted) return;
+    final kind = '${e['kind'] ?? 'link'}';
+    final src = '${e['src'] ?? ''}';
+    final href = '${e['href'] ?? ''}';
+    final page = '${e['page'] ?? _pageUrl}';
+    final title = '${e['title'] ?? ''}'.trim();
+    final streamed = src.isEmpty || src.startsWith('blob:');
+    final media = kind == 'img' || kind == 'video' || kind == 'audio';
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    final (icon, noun, type) = switch (kind) {
+      'img' => (Icons.photo_rounded, 'picture', BrowserFileType.image),
+      'video' => (Icons.movie_rounded, 'video', BrowserFileType.video),
+      'audio' => (Icons.music_note_rounded, 'audio', BrowserFileType.audio),
+      _ => (Icons.link_rounded, 'link', null),
+    };
+    showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      constraints: const BoxConstraints(maxWidth: 560),
+      builder: (sheet) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            ListTile(
+              leading: Icon(icon, color: scheme.primary),
+              title: Text(
+                title.isEmpty ? 'This $noun' : title,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(fontWeight: FontWeight.w800),
+              ),
+              subtitle: Text(
+                _shortUrl(media && !streamed ? src : (href.isEmpty ? src : href)),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+            const Divider(height: 1),
+            if (media && !streamed)
+              ListTile(
+                leading: const Icon(Icons.download_rounded),
+                title: Text('Download this $noun'),
+                onTap: () {
+                  Navigator.pop(sheet);
+                  _downloadUrl(src, referer: page, title: title.isEmpty ? null : title, type: BrowserFileType.detect(url: src) ?? type);
+                },
+              ),
+            if (media && streamed && kind != 'img')
+              ListTile(
+                leading: const Icon(Icons.video_library_rounded),
+                title: const Text('Media found on this page'),
+                subtitle: const Text('This one plays in pieces: pick it from the list, or grab the page'),
+                onTap: () {
+                  Navigator.pop(sheet);
+                  if (_sniffer.found.isEmpty && _sniffer.images.isEmpty) {
+                    _grab(_pageUrl);
+                  } else {
+                    _showMedia();
+                  }
+                },
+              ),
+            if (href.isNotEmpty) ...[
+              ListTile(
+                leading: const Icon(Icons.file_download_outlined),
+                title: const Text('Download link'),
+                subtitle: const Text('Videos, audio, pictures and subtitles'),
+                onTap: () {
+                  Navigator.pop(sheet);
+                  _downloadUrl(href, referer: page, title: title.isEmpty ? null : title);
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.open_in_browser_rounded),
+                title: const Text('Open link'),
+                onTap: () {
+                  Navigator.pop(sheet);
+                  _controller?.loadUrl(urlRequest: URLRequest(url: WebUri(href)));
+                },
+              ),
+            ],
+            ListTile(
+              leading: const Icon(Icons.copy_rounded),
+              title: const Text('Copy link'),
+              onTap: () {
+                Navigator.pop(sheet);
+                Clipboard.setData(ClipboardData(text: href.isNotEmpty ? href : src));
+                showSnack(context, 'Link copied');
+              },
+            ),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
   }
 
   Future<void> _scan() async {
@@ -225,27 +638,13 @@ class _BrowserScreenState extends State<BrowserScreen> {
     _controller?.loadUrl(urlRequest: URLRequest(url: WebUri(url)));
   }
 
-  Future<void> _grab(String mediaUrl, {bool audio = false}) async {
+  /// Hands [mediaUrl] (the page, or a stream on it) back to Home. [referer]:
+  /// the embedded player it was found in, when not the page itself.
+  Future<void> _grab(String mediaUrl, {bool audio = false, String? referer}) async {
     if (_grabbing) return;
     setState(() => _grabbing = true);
-    final services = AppScope.of(context);
     try {
-      final c = _controller;
-      String? ua;
-      if (c != null) {
-        try {
-          ua = (await c.evaluateJavascript(source: 'navigator.userAgent'))?.toString();
-        } catch (_) {}
-      }
-      final cookies = await WebSession.exportCookies(
-        {_pageUrl, mediaUrl}.toList(),
-        await services.storage.workDir('cookies'),
-      );
-      final args = <String>[
-        if (cookies != null) ...['--cookies', cookies],
-        if (ua != null && ua.isNotEmpty) ...['--user-agent', ua],
-        if (mediaUrl != _pageUrl) ...['--referer', _pageUrl],
-      ];
+      final args = await _requestArgs(mediaUrl, referer: referer);
       if (!mounted) return;
       Navigator.of(context).pop(BrowserGrab(
         pageUrl: _pageUrl,
@@ -368,8 +767,12 @@ class _BrowserScreenState extends State<BrowserScreen> {
                   shrinkWrap: true,
                   children: [
                     for (final (title, items) in [
-                      ('Videos', _sniffer.found.values.where((m) => !m.isAudio).toList().reversed.toList()),
+                      (
+                        'Videos',
+                        _sniffer.found.values.where((m) => !m.isAudio && !m.isSubtitle).toList().reversed.toList(),
+                      ),
                       ('Audio', _sniffer.found.values.where((m) => m.isAudio).toList().reversed.toList()),
+                      ('Subtitles', _sniffer.found.values.where((m) => m.isSubtitle).toList().reversed.toList()),
                     ])
                       if (items.isNotEmpty) ...[
                         Padding(
@@ -396,6 +799,7 @@ class _BrowserScreenState extends State<BrowserScreen> {
                                 switch (m.kind) {
                                   SniffedKind.audio => Icons.music_note_rounded,
                                   SniffedKind.video => Icons.movie_rounded,
+                                  SniffedKind.subtitle => Icons.closed_caption_rounded,
                                   _ => Icons.stream_rounded,
                                 },
                                 color: m.isAudio ? scheme.onSecondaryContainer : Colors.white,
@@ -409,7 +813,13 @@ class _BrowserScreenState extends State<BrowserScreen> {
                             trailing: const Icon(Icons.chevron_right_rounded),
                             onTap: () {
                               Navigator.pop(context);
-                              _grab(m.url, audio: m.isAudio);
+                              if (m.isSubtitle) {
+                                _downloadFile(m.url, BrowserFileType.subtitle, referer: m.referer);
+                              } else {
+                                // Its player's address: embed hosts often
+                                // only serve media to it.
+                                _grab(m.url, audio: m.isAudio, referer: m.referer);
+                              }
                             },
                           ),
                       ],
@@ -517,9 +927,18 @@ class _BrowserScreenState extends State<BrowserScreen> {
                     _toggleDesktop();
                   case 'pin':
                     _pinSite();
+                  case 'adblock':
+                    _toggleAdBlock();
                 }
               },
               itemBuilder: (context) => [
+                CheckedPopupMenuItem(
+                  value: 'adblock',
+                  checked: _blockAds,
+                  child: Text(
+                    _blockAds && _blocked.value > 0 ? 'Block ads & trackers · ${_blocked.value} blocked' : 'Block ads & trackers',
+                  ),
+                ),
                 const PopupMenuItem(
                   value: 'reload',
                   child: ListTile(
@@ -558,15 +977,75 @@ class _BrowserScreenState extends State<BrowserScreen> {
                 webViewEnvironment: WebSession.environment,
                 initialUrlRequest: URLRequest(url: WebUri(_startUrl)),
                 initialSettings: _settings(),
-                onWebViewCreated: (c) => _controller = c,
+                initialUserScripts: _userScripts(),
+                onWebViewCreated: (c) {
+                  _controller = c;
+                  // Media every frame finds, and long-presses (PageHooks).
+                  c.addJavaScriptHandler(
+                    handlerName: 'fnMedia',
+                    callback: (args) {
+                      if (args.isNotEmpty && args[0] is String) {
+                        final hint = args.length > 1 && '${args[1]}'.isNotEmpty ? '${args[1]}' : null;
+                        final frame = args.length > 2 && '${args[2]}'.startsWith('http') ? '${args[2]}' : null;
+                        _consider(args[0] as String, hint: hint, frame: frame);
+                      }
+                      return null;
+                    },
+                  );
+                  c.addJavaScriptHandler(
+                    handlerName: 'fnPress',
+                    callback: (args) {
+                      if (args.isNotEmpty && args.first is Map) _onPress((args.first as Map).cast<String, dynamic>());
+                      return null;
+                    },
+                  );
+                },
                 shouldOverrideUrlLoading: (c, action) async {
                   final url = action.request.url?.toString();
+                  if (url == null) return NavigationActionPolicy.ALLOW;
                   if (action.isForMainFrame && widget.youtubeHandoff && isYouTubeUrl(url)) {
-                    _handOff(url!);
+                    _handOff(url);
                     return NavigationActionPolicy.CANCEL;
+                  }
+                  // An ad page (pop-under scripts send the page there).
+                  if (_blockAds && AdBlocker.isBlocked(url)) {
+                    _noteBlocked(notice: action.isForMainFrame ? 'Blocked an ad page' : null);
+                    return NavigationActionPolicy.CANCEL;
+                  }
+                  // A link to a media file: downloaded, not opened (like a
+                  // download manager's browser).
+                  if (action.isForMainFrame) {
+                    final type = BrowserFileType.fromExtension(BrowserFileType.extensionOf(url));
+                    if (type != null && type != BrowserFileType.image) {
+                      _downloadFile(url, type);
+                      return NavigationActionPolicy.CANCEL;
+                    }
                   }
                   return NavigationActionPolicy.ALLOW;
                 },
+                onCreateWindow: _onCreateWindow,
+                onDownloadStarting: _onDownloadStarting,
+                // Windows: every request passes here (no content blockers):
+                // ads are answered with nothing, everything else is checked
+                // for media (embedded players included).
+                shouldInterceptRequest: _interceptsRequests
+                    ? (c, request) async {
+                        final url = request.url.toString();
+                        if (_blockAds && AdBlocker.isBlocked(url)) {
+                          _blocked.value++;
+                          return WebResourceResponse(
+                            contentType: 'text/plain',
+                            contentEncoding: 'utf-8',
+                            data: Uint8List(0),
+                            statusCode: 204,
+                            reasonPhrase: 'No Content',
+                          );
+                        }
+                        final from = request.headers?['Referer'] ?? request.headers?['referer'];
+                        _consider(url, frame: from);
+                        return null;
+                      }
+                    : null,
                 onLoadStart: (c, url) {
                   if (url == null) return;
                   if (widget.youtubeHandoff && isYouTubeUrl(url.toString())) {

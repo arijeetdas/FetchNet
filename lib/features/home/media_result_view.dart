@@ -8,6 +8,8 @@ import '../../core/app_services.dart';
 import '../../core/format.dart';
 import '../../engine/engine.dart';
 import '../../models/media_info.dart';
+import '../../services/extra_settings.dart';
+import '../../services/lyrics_service.dart';
 import '../../widgets/app_dialog.dart';
 import '../../widgets/brand.dart';
 import '../../widgets/motion/motion_core.dart';
@@ -34,7 +36,14 @@ class MediaResultView extends StatefulWidget {
 
 class _MediaResultViewState extends State<MediaResultView> {
   late MediaKind _kind = widget.info.preferAudio ? MediaKind.audio : MediaKind.video;
-  int _selected = 0;
+
+  /// The option picked on the current tab; `null` until the user picks one
+  /// (the quick download preset's choice is selected meanwhile).
+  int? _selected;
+
+  /// Subtitle tracks picked; `null` until the user changes them (the ones
+  /// the settings ask for are picked meanwhile).
+  Set<String>? _subtitles;
 
   /// YouTube thumbnail sizes that exist for this video, probed once.
   Future<List<DownloadOption>>? _thumbnails;
@@ -48,7 +57,7 @@ class _MediaResultViewState extends State<MediaResultView> {
     });
   }
 
-  Future<void> _download(DownloadOption option) async {
+  Future<void> _download(DownloadOption option, {List<String>? subtitleLanguages}) async {
     final services = AppScope.of(context);
     if (services.storage.downloadDir == null) {
       await services.storage.ensureDownloadDir(requestPermission: true);
@@ -60,7 +69,17 @@ class _MediaResultViewState extends State<MediaResultView> {
     }
     final name = await showRenameDialog(context, info: widget.info, option: option);
     if (name == null || !mounted) return;
-    await services.downloads.enqueue(info: widget.info, option: option, fileBaseName: name);
+    await services.downloads.enqueue(
+      info: widget.info,
+      option: option,
+      fileBaseName: name,
+      subtitleArgs: subtitleArgs(
+        services.extras,
+        option: option,
+        ffmpeg: services.engine.status.value.ffmpegAvailable,
+        languages: subtitleLanguages,
+      ),
+    );
     if (!mounted) return;
     // Works from screens pushed over the main tabs (YouTube) too.
     final navigator = Navigator.of(context, rootNavigator: true);
@@ -81,9 +100,10 @@ class _MediaResultViewState extends State<MediaResultView> {
   Widget build(BuildContext context) {
     final services = AppScope.of(context);
     return ListenableBuilder(
-      listenable: Listenable.merge([services.engine.status, services.youtube]),
+      listenable: Listenable.merge([services.engine.status, services.youtube, services.extras]),
       builder: (context, _) {
         final status = services.engine.status.value;
+        final extras = services.extras;
         final youtube = widget.info.isYouTube;
         final showThumbnails = youtube && services.youtube.thumbnailDownloads;
         final showTags = youtube && services.youtube.showTags;
@@ -102,11 +122,24 @@ class _MediaResultViewState extends State<MediaResultView> {
           MediaKind.audio => audio,
           MediaKind.thumbnail => thumbs,
           // Posts and images have their own view (PostResultView).
-          MediaKind.image || MediaKind.post => const <DownloadOption>[],
+          MediaKind.image || MediaKind.post || MediaKind.subtitle => const <DownloadOption>[],
         };
-        final selected = options.isEmpty ? null : options[_selected.clamp(0, options.length - 1)];
+        // Until the user picks, the quick download preset's choice.
+        final index = _selected ??
+            switch (kind) {
+              MediaKind.video => presetVideoIndex(options, extras.presetVideoHeight),
+              MediaKind.audio => presetAudioIndex(options, extras.presetAudio),
+              _ => 0,
+            };
+        final selected = options.isEmpty ? null : options[index.clamp(0, options.length - 1)];
         // Thumbnails are plain image downloads: no need to wait for yt-dlp.
         final canDownload = selected != null && (kind == MediaKind.thumbnail || status.isReady);
+
+        // Subtitles (Settings → Extra Settings), for videos that have any.
+        final tracks = extras.subtitles && kind == MediaKind.video
+            ? subtitleTracksOf(widget.info, wanted: extras.subtitleLanguageCodes)
+            : const <SubtitleTrack>[];
+        final picks = _subtitles ?? defaultSubtitlePicks(tracks, extras);
 
         final header = _MediaHeader(info: widget.info);
         final picker = _OptionPicker(
@@ -121,12 +154,32 @@ class _MediaResultViewState extends State<MediaResultView> {
           ffmpegMissing: !ffmpeg && kind != MediaKind.thumbnail,
           canInstallFfmpeg: services.engine.canInstallComponents && status.state == EngineState.ready,
           tags: showTags ? widget.info.tags : null,
+          subtitles: tracks.isNotEmpty
+              ? _SubtitlePicker(
+                  tracks: tracks,
+                  picked: picks,
+                  note: _subtitleNote(extras, ffmpeg),
+                  onChanged: (v) => setState(() => _subtitles = v),
+                )
+              // A song saved as audio: its synced lyrics will be looked up.
+              : kind == MediaKind.audio && extras.lyrics
+                  ? switch (LyricsQuery.fromInfo(widget.info)) {
+                      final song? => _LyricsNote(song: song, inside: ffmpeg && extras.mergeLyrics),
+                      null => null,
+                    }
+                  : null,
           onKind: (k) => setState(() {
             _kind = k;
-            _selected = 0;
+            _selected = null;
           }),
           onSelect: (o) => setState(() => _selected = options.indexOf(o)),
-          onDownload: canDownload ? () => _download(selected) : null,
+          onDownload: canDownload
+              ? () => _download(
+                    selected,
+                    // A video without subtitles gets none; otherwise the picked tracks.
+                    subtitleLanguages: kind == MediaKind.video && extras.subtitles ? picks.toList() : null,
+                  )
+              : null,
         );
 
         return LayoutBuilder(builder: (context, c) {
@@ -148,6 +201,110 @@ class _MediaResultViewState extends State<MediaResultView> {
           return HomePanel(highlight: true, padding: EdgeInsets.all(twoColumn ? 22 : 14), child: body);
         });
       },
+    );
+  }
+}
+
+/// "Saved as SRT · separate files" for the subtitle picker.
+String _subtitleNote(ExtraSettings s, bool ffmpeg) {
+  final mode = ffmpeg ? s.subtitleMode : SubtitleMode.file;
+  final how = switch (mode) {
+    SubtitleMode.file => 'separate files',
+    SubtitleMode.embed => 'inside the video',
+    SubtitleMode.both => 'inside the video and as files',
+  };
+  final format = s.subtitleFormat == SubtitleFormat.best ? 'the site\'s format' : s.subtitleFormat.label;
+  return 'Saved as $format, $how · change in Settings → Extra Settings';
+}
+
+/// "Synced lyrics for “Song” by Artist will be added if LRCLIB has them."
+class _LyricsNote extends StatelessWidget {
+  const _LyricsNote({required this.song, required this.inside});
+
+  final LyricsQuery song;
+  final bool inside;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    return Container(
+      padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+      decoration: BoxDecoration(
+        color: scheme.surfaceContainerLowest.withValues(alpha: 0.7),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: scheme.outlineVariant.withValues(alpha: 0.35)),
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.lyrics_rounded, size: 20, color: scheme.primary),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              'Synced lyrics for “${song.track}” by ${song.artist} will be added '
+              '${inside ? 'inside the song' : 'as a .lrc file'}, if LRCLIB has them.',
+              style: theme.textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant, height: 1.35),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Subtitle tracks of a video to save with it.
+class _SubtitlePicker extends StatelessWidget {
+  const _SubtitlePicker({required this.tracks, required this.picked, required this.note, required this.onChanged});
+
+  final List<SubtitleTrack> tracks;
+  final Set<String> picked;
+  final String note;
+  final ValueChanged<Set<String>> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    return Container(
+      padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+      decoration: BoxDecoration(
+        color: scheme.surfaceContainerLowest.withValues(alpha: 0.7),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: scheme.outlineVariant.withValues(alpha: 0.35)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.closed_caption_rounded, size: 20, color: scheme.primary),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text('Subtitles', style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w800)),
+              ),
+              Text(
+                picked.isEmpty ? 'None' : '${picked.length} picked',
+                style: theme.textTheme.labelMedium?.copyWith(color: scheme.onSurfaceVariant),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              for (final t in tracks)
+                FilterChip(
+                  label: Text(t.automatic ? '${t.name} · auto' : t.name),
+                  selected: picked.contains(t.code),
+                  onSelected: (on) => onChanged(on ? {...picked, t.code} : ({...picked}..remove(t.code))),
+                ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Text(note, style: theme.textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant)),
+        ],
+      ),
     );
   }
 }
@@ -302,7 +459,11 @@ class _OptionPicker extends StatelessWidget {
     required this.onKind,
     required this.onSelect,
     required this.onDownload,
+    this.subtitles,
   });
+
+  /// The subtitle picker (videos with subtitles, when they're turned on).
+  final Widget? subtitles;
 
   final MediaKind kind;
   final int videoCount;
@@ -381,7 +542,7 @@ class _OptionPicker extends StatelessWidget {
                     MediaKind.video => 'Pick a quality',
                     MediaKind.audio => 'Pick a format',
                     MediaKind.thumbnail => 'Pick a size',
-                    MediaKind.image || MediaKind.post => 'Pick files',
+                    MediaKind.image || MediaKind.post || MediaKind.subtitle => 'Pick files',
                   },
                   key: ValueKey(kind),
                   style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w800),
@@ -417,6 +578,10 @@ class _OptionPicker extends StatelessWidget {
         if (ffmpegMissing) ...[
           const SizedBox(height: 12),
           _FfmpegHint(canInstall: canInstallFfmpeg),
+        ],
+        if (subtitles != null) ...[
+          const SizedBox(height: 14),
+          subtitles!,
         ],
         const SizedBox(height: 16),
         GradientButton(

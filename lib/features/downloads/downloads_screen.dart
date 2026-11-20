@@ -49,7 +49,24 @@ class DownloadsScreen extends StatelessWidget {
               ),
             ),
             if (tasks.isNotEmpty) ...[
-              _SectionHeader(title: 'In progress', count: tasks.where((t) => t.isActive).length),
+              _SectionHeader(
+                title: 'In progress',
+                count: tasks.where((t) => t.isActive).length,
+                trailing: [
+                  if (services.downloads.hasPaused)
+                    TextButton.icon(
+                      onPressed: services.downloads.resumeAll,
+                      icon: const Icon(Icons.play_arrow_rounded, size: 18),
+                      label: const Text('Resume all'),
+                    ),
+                  if (services.downloads.hasPausable)
+                    TextButton.icon(
+                      onPressed: services.downloads.pauseAll,
+                      icon: const Icon(Icons.pause_rounded, size: 18),
+                      label: const Text('Pause all'),
+                    ),
+                ],
+              ),
               SliverList.separated(
                 itemCount: tasks.length,
                 separatorBuilder: (_, _) => const SizedBox(height: 10),
@@ -86,10 +103,13 @@ class DownloadsScreen extends StatelessWidget {
 }
 
 class _SectionHeader extends StatelessWidget {
-  const _SectionHeader({required this.title, required this.count});
+  const _SectionHeader({required this.title, required this.count, this.trailing = const []});
 
   final String title;
   final int count;
+
+  /// Buttons at the end of the row (Pause all / Resume all).
+  final List<Widget> trailing;
 
   @override
   Widget build(BuildContext context) {
@@ -116,6 +136,11 @@ class _SectionHeader extends StatelessWidget {
                   ),
                 ),
               ),
+            // On a narrow phone they wrap rather than overflow.
+            if (trailing.isNotEmpty) ...[
+              const SizedBox(width: 8),
+              Expanded(child: Wrap(alignment: WrapAlignment.end, children: trailing)),
+            ],
           ],
         ),
       ),
@@ -160,10 +185,18 @@ class _TaskCard extends StatelessWidget {
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
     final failed = task.status == DownloadStatus.failed;
+    final paused = task.status == DownloadStatus.paused;
+    final downloads = services.downloads;
 
     final stats = <String>[
-      if (task.status == DownloadStatus.queued) 'Waiting in queue',
-      if (task.stage != null && task.status != DownloadStatus.queued) task.stage!,
+      // "Waiting for Wi-Fi", "Waiting for yt-dlp…" or simply waiting.
+      if (task.status == DownloadStatus.queued) task.stage ?? 'Waiting in queue',
+      if (paused)
+        [
+          'Paused',
+          if (task.progress != null && task.progress! > 0) '${(task.progress! * 100).toStringAsFixed(0)}% done',
+        ].join(' · '),
+      if (task.stage != null && task.status != DownloadStatus.queued && !paused) task.stage!,
       if (task.status == DownloadStatus.downloading && task.totalBytes != null)
         '${formatBytes(task.downloadedBytes)} / ${formatBytes(task.totalBytes)}',
       if (task.status == DownloadStatus.downloading) formatSpeed(task.speed),
@@ -210,12 +243,25 @@ class _TaskCard extends StatelessWidget {
                     onPressed: () => services.downloads.dismiss(task),
                     icon: const Icon(Icons.close_rounded),
                   ),
-                ] else
+                ] else ...[
+                  if (paused)
+                    IconButton(
+                      tooltip: 'Resume',
+                      onPressed: () => downloads.resume(task),
+                      icon: const Icon(Icons.play_circle_outline_rounded),
+                    )
+                  else
+                    IconButton(
+                      tooltip: 'Pause',
+                      onPressed: task.stage == 'Pausing…' || task.stage == 'Cancelling…' ? null : () => downloads.pause(task),
+                      icon: const Icon(Icons.pause_circle_outline_rounded),
+                    ),
                   IconButton(
                     tooltip: 'Cancel',
-                    onPressed: task.stage == 'Cancelling…' ? null : () => services.downloads.cancel(task),
+                    onPressed: task.stage == 'Cancelling…' ? null : () => downloads.cancel(task),
                     icon: const Icon(Icons.stop_circle_outlined),
                   ),
+                ],
               ],
             ),
             const SizedBox(height: 12),
@@ -233,9 +279,12 @@ class _TaskCard extends StatelessWidget {
               )
             else ...[
               GradientProgressBar(
-                value: task.status == DownloadStatus.queued || task.status == DownloadStatus.starting
-                    ? null
-                    : task.progress,
+                // Paused: where it stopped (no moving bar).
+                value: paused
+                    ? (task.progress ?? 0)
+                    : task.status == DownloadStatus.queued || task.status == DownloadStatus.starting
+                        ? null
+                        : task.progress,
               ),
               const SizedBox(height: 8),
               Row(

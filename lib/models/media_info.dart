@@ -10,6 +10,10 @@ enum MediaKind {
 
   /// Several files of one post, saved together in a folder.
   post,
+
+  /// A subtitle file (`.srt`, `.vtt`, ...) found in Browser Mode; saved
+  /// next to the videos.
+  subtitle,
 }
 
 /// Which files of a post gallery-dl downloads.
@@ -71,6 +75,44 @@ class DownloadOption {
 
   /// Downloaded by gallery-dl (files of a post) instead of yt-dlp.
   final GalleryDownload? gallery;
+
+  Map<String, dynamic> toJson() => {
+        'kind': kind.name,
+        'label': label,
+        if (detail != null) 'detail': detail,
+        if (badge != null) 'badge': badge,
+        if (sizeBytes != null) 'sizeBytes': sizeBytes,
+        'extension': extension,
+        'formatArgs': formatArgs,
+        if (needsMerge) 'needsMerge': true,
+        if (directUrl != null) 'directUrl': directUrl,
+        if (directHeaders.isNotEmpty) 'directHeaders': directHeaders,
+        if (gallery != null) 'gallery': {'count': gallery!.count, if (gallery!.range != null) 'range': gallery!.range},
+      };
+
+  static DownloadOption? fromJson(Map<String, dynamic> j) {
+    try {
+      final g = j['gallery'];
+      return DownloadOption(
+        kind: MediaKind.values.byName(j['kind'] as String),
+        label: j['label'] as String,
+        detail: j['detail'] as String?,
+        badge: j['badge'] as String?,
+        sizeBytes: (j['sizeBytes'] as num?)?.toInt(),
+        extension: j['extension'] as String? ?? '',
+        formatArgs: [for (final a in (j['formatArgs'] as List?) ?? const []) if (a is String) a],
+        needsMerge: j['needsMerge'] == true,
+        directUrl: j['directUrl'] as String?,
+        directHeaders: {
+          for (final e in ((j['directHeaders'] as Map?) ?? const {}).entries)
+            if (e.key is String && e.value is String) e.key as String: e.value as String,
+        },
+        gallery: g is Map ? GalleryDownload(count: (g['count'] as num).toInt(), range: g['range'] as String?) : null,
+      );
+    } catch (_) {
+      return null;
+    }
+  }
 }
 
 /// One YouTube thumbnail size (see [MediaInfo.youtubeThumbnailCandidates]).
@@ -87,12 +129,50 @@ class ThumbnailCandidate {
 
 /// One entry of a playlist / channel URL.
 class PlaylistEntry {
-  const PlaylistEntry({required this.url, required this.title, this.duration, this.thumbnail});
+  const PlaylistEntry({
+    required this.url,
+    required this.title,
+    this.duration,
+    this.thumbnail,
+    this.id,
+    this.channel,
+    this.viewCount,
+    this.isList = false,
+  });
 
   final String url;
   final String title;
   final double? duration;
   final String? thumbnail;
+  final String? id;
+  final String? channel;
+  final int? viewCount;
+
+  /// A list of its own (a channel's Videos, Shorts or Live tab, or a
+  /// playlist of a channel): opened, not downloaded.
+  final bool isList;
+
+  static PlaylistEntry? fromJson(Map<String, dynamic> e) {
+    final url = (e['url'] ?? e['webpage_url'])?.toString();
+    if (url == null) return null;
+    final ie = '${e['ie_key'] ?? ''}';
+    final type = '${e['_type'] ?? ''}';
+    final path = Uri.tryParse(url)?.path ?? '';
+    final isList = type == 'playlist' ||
+        ie == 'YoutubeTab' ||
+        url.contains('/playlist?') ||
+        RegExp(r'/(videos|shorts|streams|live|playlists|podcasts|releases)/?$').hasMatch(path);
+    return PlaylistEntry(
+      url: url,
+      title: (e['title'] ?? e['id'] ?? 'Untitled').toString(),
+      duration: (e['duration'] as num?)?.toDouble(),
+      thumbnail: MediaInfo._bestThumb(e),
+      id: e['id']?.toString(),
+      channel: (e['channel'] ?? e['uploader'])?.toString(),
+      viewCount: (e['view_count'] as num?)?.toInt(),
+      isList: isList,
+    );
+  }
 }
 
 /// What yt-dlp reported for a link (`yt-dlp -J`).
@@ -110,7 +190,11 @@ class MediaInfo {
     this.entries = const [],
     this.requestArgs = const [],
     this.preferAudio = false,
+    this.listedAsPlaylist = false,
   });
+
+  /// yt-dlp answered with a playlist (even an empty page of one).
+  final bool listedAsPlaylist;
 
   /// The URL yt-dlp should be given when downloading.
   final String url;
@@ -212,16 +296,11 @@ class MediaInfo {
     final map = (jsonDecode(json.substring(start, end + 1)) as Map).cast<String, dynamic>();
 
     final entries = <PlaylistEntry>[];
-    if (map['_type'] == 'playlist' && map['entries'] is List) {
+    final isPlaylist = map['_type'] == 'playlist' && map['entries'] is List;
+    if (isPlaylist) {
       for (final e in (map['entries'] as List).whereType<Map>()) {
-        final url = (e['url'] ?? e['webpage_url'])?.toString();
-        if (url == null) continue;
-        entries.add(PlaylistEntry(
-          url: url,
-          title: (e['title'] ?? e['id'] ?? 'Untitled').toString(),
-          duration: (e['duration'] as num?)?.toDouble(),
-          thumbnail: _bestThumb(e.cast<String, dynamic>()),
-        ));
+        final entry = PlaylistEntry.fromJson(e.cast<String, dynamic>());
+        if (entry != null) entries.add(entry);
       }
     }
 
@@ -237,8 +316,12 @@ class MediaInfo {
       entries: entries,
       requestArgs: requestArgs,
       raw: map,
+      listedAsPlaylist: isPlaylist,
     );
   }
+
+  /// How many entries the playlist has in all, when the site says.
+  int? get playlistCount => (raw['playlist_count'] as num?)?.toInt();
 
   static String? _bestThumb(Map<String, dynamic> map) {
     final t = map['thumbnail']?.toString();

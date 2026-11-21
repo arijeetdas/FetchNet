@@ -20,16 +20,16 @@ Versions follow `version: <name>+<build>` in `pubspec.yaml`.
 
 ## 🚀 v1.3.1 — 2026-11-21
 
-> **Build 8**
+> **Build 8** · Pick the lyrics before downloading, lyrics for many more songs, and steady download progress.
 
-### 🆕 New
+### ✨ Highlights
 
-- 🎤 **See and choose the lyrics before downloading**: under the audio formats on Home, FetchNet looks the song's lyrics up straight away and says what it found. **View** shows every line (with its time), the other versions LRCLIB has, a **search** to find the right ones yourself, **Import file** for your own `.lrc` or `.txt` lyrics, and **No lyrics**. What you pick goes inside the song or into its .lrc file, as Extra Settings say.
+- 🎤 **Choose the lyrics before downloading**: Home shows the lyrics found for a song. **View** them line by line, pick another version, **search** LRCLIB yourself, **import** your own `.lrc` or `.txt` file, or download with **no lyrics**.
 
 ### 🐞 Fixed
 
-- 📊 **Steady download progress**: the size and percentage no longer jump around on streams (sites that send videos in pieces, where the size is only known at the end): the percentage only goes up, and the size shows as an estimate (~22 MB) that changes only when it really does. Video downloads count the video and its audio together, instead of the size switching when the audio starts.
-- 🎤 **Lyrics for songs from music labels**: songs uploaded as "Song - Movie | Cast | Singer" (T-Series, Sony Music, Zee Music, Coke Studio...) and songs from playlists now get their synced lyrics. Before, only "Artist - Song" titles found them, so most of these songs got no lyrics and no .lrc file.
+- 🎶 **Lyrics for many more songs**: label uploads ("Song - Movie | Cast | Singer", from T-Series, Sony Music, Coke Studio...) and songs from playlists now get their synced lyrics.
+- 📊 **Steady download progress**: the size and percentage no longer jump around on streamed videos, and a video and its audio count as one download.
 
 ---
 

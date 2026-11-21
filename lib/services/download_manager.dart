@@ -153,20 +153,21 @@ class DownloadManager extends ChangeNotifier {
   String _newId() => 'dl-${DateTime.now().microsecondsSinceEpoch}-${_idSeq++}';
 
   /// [subtitleArgs]: yt-dlp arguments for subtitles (see `subtitleArgs`).
+  /// [lyricsText]: lyrics the user picked or imported for a song (instead of
+  /// looking them up); [noLyrics]: the user chose none.
   Future<void> enqueue({
     required MediaInfo info,
     required DownloadOption option,
     required String fileBaseName,
     List<String> subtitleArgs = const [],
+    String? lyricsText,
+    bool noLyrics = false,
   }) async {
     await _askNotificationPermissionOnce();
     // A song saved as audio gets its synced lyrics, when they're turned on.
-    final lyrics = settings?.lyrics == true &&
-            option.kind == MediaKind.audio &&
-            option.directUrl == null &&
-            option.gallery == null
-        ? LyricsQuery.fromInfo(info)
-        : null;
+    final song = option.kind == MediaKind.audio && option.directUrl == null && option.gallery == null;
+    final picked = song && !noLyrics && lyricsText != null && lyricsText.trim().isNotEmpty ? lyricsText : null;
+    final lyrics = song && !noLyrics && picked == null && settings?.lyrics == true ? LyricsQuery.fromInfo(info) : null;
     final task = DownloadTask(
       id: _newId(),
       url: info.url,
@@ -181,7 +182,8 @@ class DownloadManager extends ChangeNotifier {
       thumbnail: info.thumbnail,
       extractor: info.extractor,
       lyrics: lyrics,
-      lyricsMode: lyrics == null ? null : settings!.lyricsMode.name,
+      lyricsText: picked,
+      lyricsMode: lyrics == null && picked == null ? null : (settings?.lyricsMode ?? SubtitleMode.embed).name,
     );
     _tasks.insert(0, task);
     notifyListeners();
@@ -357,6 +359,7 @@ class DownloadManager extends ChangeNotifier {
       extractor: failed.extractor,
       lyrics: failed.lyrics,
       lyricsMode: failed.lyricsMode,
+      lyricsText: failed.lyricsText,
     );
     _tasks.insert(0, task);
     notifyListeners();
@@ -506,14 +509,16 @@ class DownloadManager extends ChangeNotifier {
 
     // A song: its synced lyrics, looked up before downloading so FFmpeg can
     // write them into the file while it adds the other tags.
-    String? lrc;
+    // Lyrics picked on Home are used as they are.
+    String? lrc = task.lyricsText;
     var lyricsArgs = const <String>[];
     final lyrics = task.lyrics;
-    if (lyrics != null && lyricsService != null) {
+    if (lrc == null && lyrics != null && lyricsService != null) {
       task.stage = 'Looking up lyrics…';
       notifyListeners();
       try {
-        lrc = await lyricsService!.synced(lyrics).timeout(const Duration(seconds: 25));
+        // Up to five LRCLIB searches (by name, then each part of the title).
+        lrc = await lyricsService!.synced(lyrics).timeout(const Duration(seconds: 45));
       } catch (_) {}
       if (_pausing.containsKey(task.id)) {
         _settlePause(task);
@@ -530,22 +535,16 @@ class DownloadManager extends ChangeNotifier {
         _pump();
         return;
       }
-      if (lrc != null && task.lyricsMode != SubtitleMode.file.name && engine.status.value.ffmpegAvailable) {
-        lyricsArgs = lyricsEmbedArgs(lrc, formatArgs: task.option.formatArgs);
-      }
       task.stage = 'Starting…';
+    }
+    if (lrc != null && task.lyricsMode != SubtitleMode.file.name && engine.status.value.ffmpegAvailable) {
+      lyricsArgs = lyricsEmbedArgs(lrc, formatArgs: task.option.formatArgs);
     }
 
     void resetProgress(String stage) {
       task
+        ..resetProgress()
         ..status = DownloadStatus.starting
-        ..partIndex = 0
-        ..lastPartBytes = 0
-        ..progress = null
-        ..downloadedBytes = null
-        ..totalBytes = null
-        ..speed = null
-        ..eta = null
         ..stage = stage;
       notifyListeners();
       _syncNotifications();
@@ -925,30 +924,19 @@ class DownloadManager extends ChangeNotifier {
     if (line.startsWith('FNPROG|')) {
       final parts = line.split('|');
       double? num(int i) => i < parts.length ? double.tryParse(parts[i]) : null;
-      final downloaded = num(1)?.toInt();
-      final total = (num(2) ?? num(3))?.toInt();
-      final fragIndex = num(6);
-      final fragCount = num(7);
-
-      if (downloaded != null) {
-        // A new part started (video finished, audio begins).
-        if (task.lastPartBytes > 0 && downloaded < task.lastPartBytes * 0.5 && task.partIndex < task.expectedParts - 1) {
-          task.partIndex++;
-        }
-        task.lastPartBytes = downloaded;
-      }
-      double? fraction;
-      if (downloaded != null && total != null && total > 0) {
-        fraction = (downloaded / total).clamp(0, 1).toDouble();
-      } else if (fragIndex != null && fragCount != null && fragCount > 0) {
-        fraction = (fragIndex / fragCount).clamp(0, 1).toDouble();
-      }
+      // Sizes, the share done and the parts (video, then audio) are worked
+      // out by the task: estimates that move with every fragment don't
+      // make the size or the percentage jump around.
+      final fraction = task.reportProgress(
+        downloaded: num(1)?.toInt(),
+        exactTotal: num(2)?.toInt(),
+        estimatedTotal: num(3)?.toInt(),
+        fragmentIndex: num(6),
+        fragmentCount: num(7),
+      );
       task.status = DownloadStatus.downloading;
-      task.downloadedBytes = downloaded;
-      task.totalBytes = total;
       task.speed = num(4);
       task.eta = num(5)?.round();
-      task.progress = fraction == null ? null : ((task.partIndex + fraction) / task.expectedParts).clamp(0, 1).toDouble();
       final lastPartDone = fraction != null && fraction >= 0.999 && task.partIndex >= task.expectedParts - 1;
       task.stage = lastPartDone
           ? 'Finishing up…'

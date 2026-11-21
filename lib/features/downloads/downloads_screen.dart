@@ -198,7 +198,7 @@ class _TaskCard extends StatelessWidget {
         ].join(' · '),
       if (task.stage != null && task.status != DownloadStatus.queued && !paused) task.stage!,
       if (task.status == DownloadStatus.downloading && task.totalBytes != null)
-        '${formatBytes(task.downloadedBytes)} / ${formatBytes(task.totalBytes)}',
+        '${formatBytes(task.downloadedBytes)} / ${task.totalIsEstimate ? '~' : ''}${formatBytes(task.totalBytes)}',
       if (task.status == DownloadStatus.downloading) formatSpeed(task.speed),
       if (task.status == DownloadStatus.downloading) formatEta(task.eta),
     ].where((s) => s.isNotEmpty).join('  ·  ');

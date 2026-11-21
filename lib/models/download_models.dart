@@ -19,6 +19,7 @@ class DownloadTask {
     this.extractor,
     this.lyrics,
     this.lyricsMode,
+    this.lyricsText,
     DateTime? createdAt,
   }) : createdAt = createdAt ?? DateTime.now();
 
@@ -26,6 +27,10 @@ class DownloadTask {
   /// how: `embed`, `file` or `both`.
   final LyricsQuery? lyrics;
   final String? lyricsMode;
+
+  /// Lyrics picked (or imported) before downloading: used instead of
+  /// looking them up.
+  final String? lyricsText;
 
   /// Lyrics to save as a `.lrc` next to the finished file.
   String? lyricsFile;
@@ -70,7 +75,134 @@ class DownloadTask {
   int partIndex = 0;
   int lastPartBytes = 0;
 
+  /// Bytes of the parts already downloaded (the video, while the audio
+  /// downloads).
+  int finishedPartBytes = 0;
+
+  /// [totalBytes] is an estimate (a stream in fragments: yt-dlp only knows
+  /// the size at the end), shown as "~".
+  bool totalIsEstimate = false;
+
+  // The part downloading now: its size (exact, or the estimate shown) and
+  // how much of it is done (never goes back).
+  int? _partTotal;
+  bool _partEstimated = false;
+  double _partFraction = 0;
+
   int get expectedParts => option.needsMerge ? 2 : 1;
+
+  /// Forgets the progress (a retry starts over).
+  void resetProgress() {
+    partIndex = 0;
+    lastPartBytes = 0;
+    finishedPartBytes = 0;
+    totalIsEstimate = false;
+    _partTotal = null;
+    _partEstimated = false;
+    _partFraction = 0;
+    progress = null;
+    downloadedBytes = null;
+    totalBytes = null;
+    speed = null;
+    eta = null;
+  }
+
+  /// One progress line from yt-dlp: [downloaded] bytes of the current part,
+  /// its [exactTotal] when known, else yt-dlp's [estimatedTotal] (which
+  /// moves with every fragment of a stream). Sets [progress] (it never goes
+  /// back), [downloadedBytes] and [totalBytes] for the whole download (video
+  /// and audio together when the sizes are known), and returns this part's
+  /// share done, 0..1.
+  double? reportProgress({
+    int? downloaded,
+    int? exactTotal,
+    int? estimatedTotal,
+    double? fragmentIndex,
+    double? fragmentCount,
+  }) {
+    final parts = expectedParts;
+    if (downloaded != null) {
+      // A new part started (video finished, audio begins): bytes count from
+      // zero again. Not a part that's only half done (a fragment retried).
+      final partDone = _partTotal == null || lastPartBytes >= _partTotal! * 0.9;
+      if (lastPartBytes > 0 && downloaded < lastPartBytes * 0.5 && partIndex < parts - 1 && partDone) {
+        finishedPartBytes += lastPartBytes;
+        partIndex++;
+        _partTotal = null;
+        _partEstimated = false;
+        _partFraction = 0;
+      }
+      if (downloaded > lastPartBytes || downloaded < lastPartBytes * 0.5) lastPartBytes = downloaded;
+    }
+
+    final exact = exactTotal != null && exactTotal > 0 ? exactTotal : null;
+    final estimate = estimatedTotal != null && estimatedTotal > 0 ? estimatedTotal : null;
+    if (exact != null) {
+      _partTotal = exact;
+      _partEstimated = false;
+    } else if (estimate != null) {
+      // The estimate shown moves only for a real change, or once the
+      // download passes it.
+      final shown = _partTotal;
+      if (shown == null || !_partEstimated || (estimate - shown).abs() > shown * 0.08 || (downloaded ?? 0) > shown) {
+        _partTotal = estimate;
+      }
+      _partEstimated = true;
+    }
+
+    // This part's share done, from the latest size (exact or estimated), else
+    // from the fragments.
+    final sizeNow = exact ?? estimate;
+    double? f;
+    if (downloaded != null && sizeNow != null) {
+      f = downloaded / sizeNow;
+    } else if (fragmentIndex != null && fragmentCount != null && fragmentCount > 0) {
+      f = fragmentIndex / fragmentCount;
+    }
+    if (f != null) {
+      // An estimate isn't done until yt-dlp says so.
+      f = f.clamp(0.0, exact != null ? 1.0 : 0.99).toDouble();
+      if (f > _partFraction) _partFraction = f;
+    }
+
+    // The whole download: one file, or video + audio whose sizes the format
+    // list gave (the video's real size replaces its share once known).
+    final partTotal = _partTotal;
+    final byBytes = parts == 1 || option.sizeBytes != null;
+    int? overall;
+    if (partTotal != null) {
+      if (parts == 1) {
+        overall = partTotal;
+      } else if (partIndex >= parts - 1) {
+        overall = finishedPartBytes + partTotal;
+      } else if (option.sizeBytes != null) {
+        overall = option.sizeBytes! > partTotal ? option.sizeBytes! : partTotal;
+      }
+    }
+    if (overall != null) {
+      downloadedBytes = finishedPartBytes + (downloaded ?? (_partFraction * partTotal!).round());
+      totalBytes = overall;
+      totalIsEstimate = _partEstimated || (parts > 1 && partIndex < parts - 1);
+    } else {
+      // Only this part's size is known: its own numbers ("Downloading video").
+      downloadedBytes = downloaded;
+      totalBytes = partTotal;
+      totalIsEstimate = _partEstimated;
+    }
+
+    double? p;
+    if (byBytes && overall != null && overall > 0 && partTotal != null) {
+      p = (finishedPartBytes + _partFraction * partTotal) / overall;
+    } else if (f != null || _partFraction > 0) {
+      p = (partIndex + _partFraction) / parts;
+    }
+    if (p != null) {
+      p = p.clamp(0.0, 1.0).toDouble();
+      // The bar never goes back.
+      if (progress == null || p > progress!) progress = p;
+    }
+    return f == null ? null : _partFraction;
+  }
 
   /// Not finished yet: waiting, running or paused.
   bool get isActive =>
@@ -100,6 +232,7 @@ class DownloadTask {
         if (extractor != null) 'extractor': extractor,
         if (lyrics != null) 'lyrics': lyrics!.toJson(),
         if (lyricsMode != null) 'lyricsMode': lyricsMode,
+        if (lyricsText != null) 'lyricsText': lyricsText,
         'createdAt': createdAt.toIso8601String(),
         'status': switch (status) {
           DownloadStatus.paused => 'paused',
@@ -128,6 +261,7 @@ class DownloadTask {
         extractor: j['extractor'] as String?,
         lyrics: LyricsQuery.fromJson(j['lyrics']),
         lyricsMode: j['lyricsMode'] as String?,
+        lyricsText: j['lyricsText'] as String?,
         createdAt: DateTime.tryParse('${j['createdAt']}'),
       )
         ..status = switch (j['status']) {

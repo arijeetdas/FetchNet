@@ -10,6 +10,7 @@ import '../../engine/engine.dart';
 import '../../models/media_info.dart';
 import '../../services/extra_settings.dart';
 import '../../services/lyrics_service.dart';
+import 'lyrics_picker.dart';
 import '../../widgets/app_dialog.dart';
 import '../../widgets/brand.dart';
 import '../../widgets/motion/motion_core.dart';
@@ -49,6 +50,42 @@ class _MediaResultViewState extends State<MediaResultView> {
   Future<List<DownloadOption>>? _thumbnails;
   List<DownloadOption>? _thumbnailOptions;
 
+  // Lyrics for a song saved as audio: looked up as soon as the audio
+  // formats show, so the card can say what will be added.
+  Future<LyricsLookup>? _lyricsLookup;
+  LyricsLookup? _lyricsResult;
+  LyricsChoice? _lyricsChoice;
+  LyricsService? _lyricsService;
+
+  LyricsService _lyrics(AppServices services) => _lyricsService ??= services.downloads.lyricsService ?? LyricsService();
+
+  void _loadLyrics(AppServices services, LyricsQuery? song) {
+    if (_lyricsLookup != null) return;
+    if (song == null) {
+      _lyricsResult = LyricsLookup.empty;
+      _lyricsLookup = Future.value(LyricsLookup.empty);
+      return;
+    }
+    _lyricsLookup = _lyrics(services).lookup(song).timeout(const Duration(seconds: 45), onTimeout: () => LyricsLookup.empty).then((r) {
+      if (mounted) setState(() => _lyricsResult = r);
+      return r;
+    });
+  }
+
+  Future<void> _openLyrics(AppServices services, LyricsQuery? song) async {
+    _loadLyrics(services, song);
+    final choice = await showLyricsPicker(
+      context,
+      service: _lyrics(services),
+      videoTitle: widget.info.title,
+      lookup: _lyricsLookup!,
+      searchText: song?.searchPhrases.firstOrNull ?? LyricsQuery.cleanTitle(widget.info.title),
+      duration: widget.info.duration,
+      current: _lyricsChoice,
+    );
+    if (choice != null && mounted) setState(() => _lyricsChoice = choice);
+  }
+
   void _loadThumbnails() {
     if (_thumbnails != null) return;
     _thumbnails = probeThumbnails(widget.info).then((list) {
@@ -69,10 +106,14 @@ class _MediaResultViewState extends State<MediaResultView> {
     }
     final name = await showRenameDialog(context, info: widget.info, option: option);
     if (name == null || !mounted) return;
+    // The lyrics picked in the popup, else the ones the card found.
+    final choice = _lyricsChoice;
     await services.downloads.enqueue(
       info: widget.info,
       option: option,
       fileBaseName: name,
+      lyricsText: choice?.match?.lyrics ?? (choice == null ? _lyricsResult?.best?.lyrics : null),
+      noLyrics: choice?.none ?? false,
       subtitleArgs: subtitleArgs(
         services.extras,
         option: option,
@@ -94,6 +135,19 @@ class _MediaResultViewState extends State<MediaResultView> {
       },
     );
     widget.onQueued?.call();
+  }
+
+  Widget _lyricsCard(AppServices services, {required bool inside}) {
+    final song = LyricsQuery.fromInfo(widget.info);
+    _loadLyrics(services, song);
+    return LyricsCard(
+      looking: _lyricsResult == null,
+      found: _lyricsResult?.best,
+      choice: _lyricsChoice,
+      isSong: song != null,
+      inside: inside,
+      onOpen: () => _openLyrics(services, song),
+    );
   }
 
   @override
@@ -161,12 +215,9 @@ class _MediaResultViewState extends State<MediaResultView> {
                   note: _subtitleNote(extras, ffmpeg),
                   onChanged: (v) => setState(() => _subtitles = v),
                 )
-              // A song saved as audio: its synced lyrics will be looked up.
+              // A song saved as audio: its lyrics, found (or picked) now.
               : kind == MediaKind.audio && extras.lyrics
-                  ? switch (LyricsQuery.fromInfo(widget.info)) {
-                      final song? => _LyricsNote(song: song, inside: ffmpeg && extras.mergeLyrics),
-                      null => null,
-                    }
+                  ? _lyricsCard(services, inside: ffmpeg && extras.mergeLyrics)
                   : null,
           onKind: (k) => setState(() {
             _kind = k;
@@ -215,41 +266,6 @@ String _subtitleNote(ExtraSettings s, bool ffmpeg) {
   };
   final format = s.subtitleFormat == SubtitleFormat.best ? 'the site\'s format' : s.subtitleFormat.label;
   return 'Saved as $format, $how · change in Settings → Extra Settings';
-}
-
-/// "Synced lyrics for “Song” by Artist will be added if LRCLIB has them."
-class _LyricsNote extends StatelessWidget {
-  const _LyricsNote({required this.song, required this.inside});
-
-  final LyricsQuery song;
-  final bool inside;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final scheme = theme.colorScheme;
-    return Container(
-      padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
-      decoration: BoxDecoration(
-        color: scheme.surfaceContainerLowest.withValues(alpha: 0.7),
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: scheme.outlineVariant.withValues(alpha: 0.35)),
-      ),
-      child: Row(
-        children: [
-          Icon(Icons.lyrics_rounded, size: 20, color: scheme.primary),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Text(
-              'Synced lyrics for “${song.track}” by ${song.artist} will be added '
-              '${inside ? 'inside the song' : 'as a .lrc file'}, if LRCLIB has them.',
-              style: theme.textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant, height: 1.35),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
 }
 
 /// Subtitle tracks of a video to save with it.

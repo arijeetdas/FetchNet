@@ -180,6 +180,7 @@ class LyricsQuery {
 /// Lyrics for a song: found on LRCLIB, or imported from a file.
 class LyricsMatch {
   const LyricsMatch({
+    this.id,
     required this.lyrics,
     required this.artist,
     required this.track,
@@ -190,6 +191,9 @@ class LyricsMatch {
     this.strong = false,
     this.fileName,
   });
+
+  /// LRCLIB's id for this entry (`null` for an imported file).
+  final Object? id;
 
   /// LRC text (`[mm:ss.xx] line`) when [synced], else plain lines.
   final String lyrics;
@@ -221,6 +225,7 @@ class LyricsMatch {
     final hasSynced = synced is String && synced.trim().isNotEmpty;
     if (!hasSynced && (plain is! String || plain.trim().isEmpty)) return null;
     return LyricsMatch(
+      id: r['id'],
       lyrics: hasSynced ? synced : plain as String,
       synced: hasSynced,
       artist: '${r['artistName'] ?? ''}',
@@ -253,7 +258,13 @@ class LyricsMatch {
   }
 
   /// The same lyrics (the picker keeps its choice across searches).
-  bool sameAs(LyricsMatch other) => lyrics == other.lyrics && track == other.track && artist == other.artist;
+  /// LRCLIB often lists the same song twice (an album and a single) with
+  /// the same lyrics: entries are told apart by their id.
+  bool sameAs(LyricsMatch other) {
+    if (identical(this, other)) return true;
+    if (id != null || other.id != null) return id == other.id;
+    return fileName == other.fileName && lyrics == other.lyrics && track == other.track && artist == other.artist;
+  }
 }
 
 /// What a lookup found: the lyrics picked for the song (synced ones that fit
@@ -472,7 +483,8 @@ class _Fit {
 
 /// yt-dlp arguments that write [lrc] into the song's own lyrics tag (ID3
 /// USLT for MP3, ©lyr for M4A, LYRICS for Opus / Vorbis), through the
-/// FFmpeg metadata step.
+/// FFmpeg metadata step. (FFmpeg 7, on Android, can't write an MP3's USLT:
+/// FetchNet fixes that once the song is saved, see `Mp3Lyrics`.)
 List<String> lyricsEmbedArgs(String lrc, {required List<String> formatArgs}) {
   // yt-dlp splits these like a POSIX shell: single quotes keep everything
   // (new lines too); a quote inside becomes '"'"'.

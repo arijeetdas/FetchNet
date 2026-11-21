@@ -6,12 +6,22 @@ import 'dart:typed_data';
 /// What a song file says about itself: title, artist, album, its cover
 /// picture and its lyrics (synced LRC or plain).
 class AudioTags {
-  const AudioTags({this.title, this.artist, this.album, this.lyrics, this.cover});
+  const AudioTags({this.title, this.artist, this.album, this.lyrics, this.cover, this.lyricsElsewhere});
 
   final String? title;
   final String? artist;
   final String? album;
+
+  /// From the song's lyrics tag, the one music players read.
   final String? lyrics;
+
+  /// Lyrics left in a plain text field (an MP3's TXXX "USLT" / "LYRICS",
+  /// as FFmpeg 7 rewrites them): FetchNet's player shows them, other players
+  /// don't.
+  final String? lyricsElsewhere;
+
+  /// [lyrics], else [lyricsElsewhere].
+  String? get anyLyrics => lyrics ?? lyricsElsewhere;
 
   /// The picture's bytes (JPEG / PNG).
   final Uint8List? cover;
@@ -55,7 +65,7 @@ class AudioTags {
     if (header[5] & 0x40 != 0 && tag.length > 4) {
       pos += major == 4 ? _syncsafe(tag, 0) : _be32(tag, 0) + 4;
     }
-    String? title, artist, album, lyrics;
+    String? title, artist, album, lyrics, elsewhere;
     Uint8List? cover;
     var coverType = -1;
     final v22 = major == 2;
@@ -83,6 +93,8 @@ class AudioTags {
           album ??= _id3Text(data);
         case 'USLT' || 'ULT':
           lyrics ??= _id3Lyrics(data);
+        case 'TXXX' || 'TXX':
+          elsewhere ??= _id3LyricsField(data);
         case 'APIC' || 'PIC':
           final pic = _id3Picture(data, v22: v22);
           // The front cover (type 3) wins over other pictures.
@@ -93,7 +105,7 @@ class AudioTags {
       }
       pos = end;
     }
-    return AudioTags(title: title, artist: artist, album: album, lyrics: lyrics, cover: cover);
+    return AudioTags(title: title, artist: artist, album: album, lyrics: lyrics, cover: cover, lyricsElsewhere: elsewhere);
   }
 
   static int _syncsafe(List<int> b, int i) => (b[i] << 21) | (b[i + 1] << 14) | (b[i + 2] << 7) | b[i + 3];
@@ -150,6 +162,17 @@ class AudioTags {
     final textStart = _skipString(d, 4, enc); // language (3), then the description
     if (textStart >= d.length) return null;
     return _clean(_decode(d.sublist(textStart), enc).replaceAll('\r\n', '\n'));
+  }
+
+  /// A TXXX frame holding lyrics ("USLT", "LYRICS"…), or `null`.
+  static String? _id3LyricsField(List<int> d) {
+    if (d.length < 3) return null;
+    final enc = d[0];
+    final valueStart = _skipString(d, 1, enc);
+    if (valueStart >= d.length) return null;
+    final name = _decode(d.sublist(1, valueStart), enc).trim().toUpperCase();
+    if (!const {'USLT', 'LYRICS', 'UNSYNCEDLYRICS', 'SYNCEDLYRICS', 'UNSYNCED LYRICS'}.contains(name)) return null;
+    return _clean(_decode(d.sublist(valueStart), enc).replaceAll('\r\n', '\n'));
   }
 
   static (int, Uint8List)? _id3Picture(List<int> d, {required bool v22}) {

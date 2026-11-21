@@ -14,7 +14,10 @@ import '../models/media_info.dart';
 import 'extra_settings.dart';
 import 'fetch_service.dart';
 import 'history_store.dart';
+import 'audio_tags.dart';
 import 'lyrics_service.dart';
+import 'lyrics_store.dart';
+import 'mp3_lyrics.dart';
 import 'storage_service.dart';
 
 /// Extra yt-dlp arguments a download gets from the user's settings.
@@ -402,6 +405,17 @@ class DownloadManager extends ChangeNotifier {
         if (f.existsSync()) f.deleteSync();
       } catch (_) {}
       await NativeBridge.scanFile(path);
+      // A song's lyrics go with it: its .lrc and FetchNet's own copy.
+      if (entry.kind == MediaKind.audio) {
+        final lrc = File(p.setExtension(path, '.lrc'));
+        try {
+          if (lrc.existsSync() && !p.equals(lrc.path, path)) {
+            lrc.deleteSync();
+            await NativeBridge.scanFile(lrc.path);
+          }
+        } catch (_) {}
+        await LyricsStore.remove(path);
+      }
     }
     // Posts saved by v1.2.0 had a folder of their own: it goes once empty.
     // The FetchNet folder and its type folders always stay.
@@ -608,6 +622,7 @@ class DownloadManager extends ChangeNotifier {
         // The .lrc file goes next to the song before it's reported done.
         final keepFile = task.lyricsMode != SubtitleMode.embed.name || lyricsArgs.isEmpty;
         if (lrc != null && keepFile) task.lyricsFile = lrc;
+        task.lyricsInside = lyricsArgs.isEmpty ? null : lrc;
         await _complete(task, dir);
       } else {
         final message = extractEngineError(result.stderr.isEmpty ? result.stdout : result.stderr);
@@ -621,12 +636,49 @@ class DownloadManager extends ChangeNotifier {
 
   /// Saves synced lyrics next to [audioPath] (`Song.mp3` → `Song.lrc`), where
   /// music players look for them.
-  Future<void> _writeLyricsFile(String audioPath, String lrc) async {
+  Future<bool> _writeLyricsFile(String audioPath, String lrc) async {
     try {
       final path = p.setExtension(audioPath, '.lrc');
-      await File(path).writeAsString(lrc);
+      await File(path).writeAsString(lrc, flush: true);
       await NativeBridge.scanFile(path);
-    } catch (_) {}
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// The song's lyrics, once it's saved: FFmpeg's copy inside the file is
+  /// checked (some formats have no lyrics tag, and a failed tag step isn't
+  /// always an error), and a `.lrc` next to the song stands in when they
+  /// aren't there. FetchNet keeps its own copy too, so its player always
+  /// shows them.
+  Future<void> _finishLyrics(DownloadTask task, String path) async {
+    final inside = task.lyricsInside;
+    var file = task.lyricsFile;
+    task
+      ..lyricsInside = null
+      ..lyricsFile = null;
+    if (inside == null && file == null) return;
+    if (inside != null && file == null) {
+      Future<bool> inTheSong() async {
+        try {
+          return ((await AudioTags.read(path)).lyrics ?? '').trim().isNotEmpty;
+        } catch (_) {
+          return false;
+        }
+      }
+
+      var ok = await inTheSong();
+      // FFmpeg 7 (Android) leaves an MP3's lyrics in a field players don't
+      // read: FetchNet writes the real lyrics tag itself.
+      if (!ok && p.extension(path).toLowerCase() == '.mp3' && await Mp3Lyrics.write(path, inside)) {
+        ok = await inTheSong();
+        await NativeBridge.scanFile(path);
+      }
+      if (!ok) file = inside;
+    }
+    if (file != null) await _writeLyricsFile(path, file);
+    await LyricsStore.save(path, inside ?? file!);
   }
 
   /// A sign-in / bot check or a refused request: retry with the browser's
@@ -990,11 +1042,7 @@ class DownloadManager extends ChangeNotifier {
     task.status = DownloadStatus.completed;
     task.progress = 1;
     await NativeBridge.scanFile(path);
-    final lrc = task.lyricsFile;
-    if (lrc != null) {
-      task.lyricsFile = null;
-      await _writeLyricsFile(path, lrc);
-    }
+    await _finishLyrics(task, path);
     _tasks.remove(task);
     await _record(task);
     _finishNotification(task);

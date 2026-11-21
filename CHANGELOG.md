@@ -18,6 +18,17 @@ Versions follow `version: <name>+<build>` in `pubspec.yaml`.
 
 ---
 
+## 🚀 v1.3.2 — 2026-11-22
+
+> **Build 9** · Lyrics that really show up in MP3s on Android, and one choice at a time in the lyrics list.
+
+### 🐞 Fixed
+
+- 🎤 **Lyrics inside MP3s on Android**: Android's FFmpeg left an MP3's lyrics in a field music players don't read. FetchNet now writes the real lyrics tag itself, and saves a .lrc next to any song whose lyrics still aren't inside. Songs downloaded before show their lyrics in FetchNet's player.
+- ☑️ **One choice in the lyrics list**: when LRCLIB lists the same lyrics twice, only the one you tap is selected.
+
+---
+
 ## 🚀 v1.3.1 — 2026-11-21
 
 > **Build 8** · Pick the lyrics before downloading, lyrics for many more songs, and steady download progress.

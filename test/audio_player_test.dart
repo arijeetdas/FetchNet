@@ -5,6 +5,7 @@ import 'dart:typed_data';
 import 'package:fetchnet/features/player/art_palette.dart';
 import 'package:fetchnet/services/audio_tags.dart';
 import 'package:fetchnet/services/lrc.dart';
+import 'package:fetchnet/services/mp3_lyrics.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -47,6 +48,39 @@ void main() {
       expect(tags.album, 'Debut');
       expect(tags.lyrics, '[00:01.00]Hello\n[00:02.50]World');
       expect(tags.cover, _cover);
+    });
+
+    test('MP3 whose lyrics FFmpeg 7 left in a TXXX "USLT" field: still found (not as the real tag)', () {
+      final frames = [
+        ..._id3Frame('TXXX', [0, ...latin1.encode('USLT'), 0, ...utf8.encode('[00:15.82] The club')]),
+        ..._id3Frame('TXXX', [0, ...latin1.encode('purl'), 0, ...latin1.encode('https://x')]),
+      ];
+      final path = write('phone.mp3', [...latin1.encode('ID3'), 3, 0, 0, ..._syncsafe(frames.length), ...frames, 0xFF, 0xFB, 0, 0]);
+      final tags = AudioTags.readSync(path);
+      expect(tags.lyrics, isNull);
+      expect(tags.lyricsElsewhere, '[00:15.82] The club');
+      expect(tags.anyLyrics, '[00:15.82] The club');
+    });
+
+    test('MP3: FetchNet puts the lyrics in a real USLT frame (keeping the other tags and the audio)', () {
+      final frames = [
+        ..._id3Frame('TIT2', [3, ...utf8.encode('Song')]),
+        ..._id3Frame('TXXX', [0, ...latin1.encode('USLT'), 0, ...utf8.encode('[00:01.00] old')]),
+        ..._id3Frame('APIC', [0, ...latin1.encode('image/jpeg'), 0, 3, 0, ..._cover]),
+      ];
+      const audio = [0xFF, 0xFB, 0x90, 0x00, 1, 2, 3, 4];
+      final path = write('fix.mp3', [...latin1.encode('ID3'), 3, 0, 0, ..._syncsafe(frames.length), ...frames, ...audio]);
+      expect(Mp3Lyrics.writeSync(path, '[00:01.00] Hello\n[00:02.00] नमस्ते'), isTrue);
+      final tags = AudioTags.readSync(path);
+      expect(tags.lyrics, '[00:01.00] Hello\n[00:02.00] नमस्ते');
+      expect(tags.lyricsElsewhere, isNull);
+      expect([tags.title, tags.cover], ['Song', _cover]);
+      final bytes = File(path).readAsBytesSync();
+      expect(bytes.sublist(bytes.length - audio.length), audio);
+      // A song without a tag gets one.
+      final bare = write('bare.mp3', audio);
+      expect(Mp3Lyrics.writeSync(bare, 'x'), isTrue);
+      expect(AudioTags.readSync(bare).lyrics, 'x');
     });
 
     test('M4A: the iTunes tags inside moov', () {

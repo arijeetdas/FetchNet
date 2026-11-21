@@ -139,6 +139,7 @@ void main() {
     expect(args[1], '--postprocessor-args');
     expect(args[2], startsWith("Metadata+ffmpeg_o:-metadata 'lyrics=[00:01.00] It'\"'\"'s"));
     expect(lyricsEmbedArgs('x', formatArgs: const ['--embed-metadata']).first, '--postprocessor-args');
+    expect(args, hasLength(3));
   });
 
   test('a queued song keeps its lyrics settings across restarts', () {
@@ -200,6 +201,16 @@ void main() {
       expect(found.first.synced, isTrue);
       expect(found.last.synced, isFalse);
       expect(await service.search('  '), isEmpty);
+    });
+
+    test('the same lyrics listed twice are still two choices (only one is picked)', () {
+      final a = LyricsMatch.fromResult({'id': 10, 'artistName': 'Coldplay', 'trackName': 'Yellow', 'albumName': 'Parachutes', 'syncedLyrics': '[00:01.00] x'})!;
+      final b = LyricsMatch.fromResult({'id': 11, 'artistName': 'Coldplay', 'trackName': 'Yellow', 'albumName': 'Singles', 'syncedLyrics': '[00:01.00] x'})!;
+      expect(a.sameAs(b), isFalse);
+      expect(a.sameAs(LyricsMatch.fromResult({'id': 10, 'artistName': 'Coldplay', 'trackName': 'Yellow', 'syncedLyrics': '[00:01.00] x'})!), isTrue);
+      final file = LyricsMatch.fromFile('a.lrc', '[00:01.00] x')!;
+      expect(file.sameAs(a), isFalse);
+      expect(file.sameAs(LyricsMatch.fromFile('a.lrc', '[00:01.00] x')!), isTrue);
     });
 
     test('a .lrc file keeps its tags and timing; a .txt is plain lyrics', () {

@@ -12,9 +12,7 @@ import '../../widgets/app_dialog.dart';
 /// What the user chose for a song's lyrics on Home: these lyrics, or none.
 class LyricsChoice {
   const LyricsChoice.use(LyricsMatch this.match) : none = false;
-  const LyricsChoice.none()
-      : match = null,
-        none = true;
+  const LyricsChoice.none() : match = null, none = true;
 
   final LyricsMatch? match;
   final bool none;
@@ -36,14 +34,7 @@ Future<LyricsChoice?> showLyricsPicker(
     context: context,
     barrierDismissible: true,
     lockBack: false,
-    builder: (_) => _LyricsPicker(
-      service: service,
-      videoTitle: videoTitle,
-      lookup: lookup,
-      searchText: searchText ?? '',
-      duration: duration,
-      current: current,
-    ),
+    builder: (_) => _LyricsPicker(service: service, videoTitle: videoTitle, lookup: lookup, searchText: searchText ?? '', duration: duration, current: current),
   );
 }
 
@@ -84,17 +75,20 @@ class _LyricsPickerState extends State<_LyricsPicker> {
   void initState() {
     super.initState();
     _selected = widget.current?.match;
-    widget.lookup.then((r) {
-      if (!mounted || _resultsFor != null) return;
-      setState(() {
-        _best = r.best;
-        _matches = r.matches;
-        _loading = false;
-        if (widget.current == null) _selected = r.best ?? r.matches.firstOrNull;
-      });
-    }, onError: (_) {
-      if (mounted) setState(() => _loading = false);
-    });
+    widget.lookup.then(
+      (r) {
+        if (!mounted || _resultsFor != null) return;
+        setState(() {
+          _best = r.best;
+          _matches = r.matches;
+          _loading = false;
+          if (widget.current == null) _selected = r.best ?? r.matches.firstOrNull;
+        });
+      },
+      onError: (_) {
+        if (mounted) setState(() => _loading = false);
+      },
+    );
   }
 
   @override
@@ -158,17 +152,17 @@ class _LyricsPickerState extends State<_LyricsPicker> {
   }
 
   void _backToMatches() => setState(() {
-        _searchId++;
-        _resultsFor = null;
-        _loading = true;
-        widget.lookup.then((r) {
-          if (!mounted || _resultsFor != null) return;
-          setState(() {
-            _matches = r.matches;
-            _loading = false;
-          });
-        });
+    _searchId++;
+    _resultsFor = null;
+    _loading = true;
+    widget.lookup.then((r) {
+      if (!mounted || _resultsFor != null) return;
+      setState(() {
+        _matches = r.matches;
+        _loading = false;
       });
+    });
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -298,7 +292,13 @@ class _LyricsPickerState extends State<_LyricsPicker> {
                     return Column(
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
-                        Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [Flexible(child: import), Flexible(child: none)]),
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Flexible(child: import),
+                            Flexible(child: none),
+                          ],
+                        ),
                         const SizedBox(height: 6),
                         use,
                       ],
@@ -339,10 +339,7 @@ class _MatchList extends StatelessWidget {
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
     return DecoratedBox(
-      decoration: BoxDecoration(
-        color: scheme.surfaceContainerLow,
-        borderRadius: BorderRadius.circular(20),
-      ),
+      decoration: BoxDecoration(color: scheme.surfaceContainerLow, borderRadius: BorderRadius.circular(20)),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -421,60 +418,61 @@ class _MatchTile extends StatelessWidget {
       if (m.album != null && !m.imported) m.album!,
       if (m.duration != null) formatDuration(m.duration),
     ].join(' · ');
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 2),
-      child: Material(
-        color: selected ? scheme.primaryContainer : Colors.transparent,
-        borderRadius: BorderRadius.circular(16),
-        clipBehavior: Clip.antiAlias,
-        child: InkWell(
-          onTap: onTap,
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(10, 9, 10, 9),
-            child: Row(
-              children: [
-                Icon(
-                  selected ? Icons.radio_button_checked_rounded : Icons.radio_button_off_rounded,
-                  size: 20,
-                  color: selected ? scheme.primary : scheme.onSurfaceVariant,
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        m.track.isEmpty ? 'Untitled' : m.track,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: theme.textTheme.bodyMedium?.copyWith(
-                          fontWeight: FontWeight.w800,
-                          color: selected ? scheme.onPrimaryContainer : null,
-                        ),
-                      ),
-                      if (details.isNotEmpty)
+    return Semantics(
+      selected: selected,
+      inMutuallyExclusiveGroup: true,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 2),
+        child: Material(
+          color: selected ? scheme.primaryContainer : Colors.transparent,
+          borderRadius: BorderRadius.circular(16),
+          clipBehavior: Clip.antiAlias,
+          child: InkWell(
+            onTap: onTap,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(10, 9, 10, 9),
+              child: Row(
+                children: [
+                  Icon(
+                    selected ? Icons.radio_button_checked_rounded : Icons.radio_button_off_rounded,
+                    size: 20,
+                    color: selected ? scheme.primary : scheme.onSurfaceVariant,
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
                         Text(
-                          details,
+                          m.track.isEmpty ? 'Untitled' : m.track,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
-                          style: theme.textTheme.bodySmall?.copyWith(
-                            color: selected ? scheme.onPrimaryContainer.withValues(alpha: 0.8) : scheme.onSurfaceVariant,
-                          ),
+                          style: theme.textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w800, color: selected ? scheme.onPrimaryContainer : null),
                         ),
-                      const SizedBox(height: 4),
-                      Wrap(
-                        spacing: 6,
-                        runSpacing: 4,
-                        children: [
-                          if (best) _Badge(text: 'Best match', icon: Icons.auto_awesome_rounded, strong: true),
-                          if (m.imported) const _Badge(text: 'From file', icon: Icons.folder_rounded),
-                          _Badge(text: m.synced ? 'Synced' : 'Plain text', icon: m.synced ? Icons.timer_outlined : Icons.notes_rounded),
-                        ],
-                      ),
-                    ],
+                        if (details.isNotEmpty)
+                          Text(
+                            details,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              color: selected ? scheme.onPrimaryContainer.withValues(alpha: 0.8) : scheme.onSurfaceVariant,
+                            ),
+                          ),
+                        const SizedBox(height: 4),
+                        Wrap(
+                          spacing: 6,
+                          runSpacing: 4,
+                          children: [
+                            if (best) _Badge(text: 'Best match', icon: Icons.auto_awesome_rounded, strong: true),
+                            if (m.imported) const _Badge(text: 'From file', icon: Icons.folder_rounded),
+                            _Badge(text: m.synced ? 'Synced' : 'Plain text', icon: m.synced ? Icons.timer_outlined : Icons.notes_rounded),
+                          ],
+                        ),
+                      ],
+                    ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
           ),
         ),
@@ -496,16 +494,16 @@ class _Badge extends StatelessWidget {
     final fg = strong ? scheme.onTertiaryContainer : scheme.onSurfaceVariant;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
-      decoration: BoxDecoration(
-        color: strong ? scheme.tertiaryContainer : scheme.surfaceContainerHighest,
-        borderRadius: BorderRadius.circular(999),
-      ),
+      decoration: BoxDecoration(color: strong ? scheme.tertiaryContainer : scheme.surfaceContainerHighest, borderRadius: BorderRadius.circular(999)),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
           Icon(icon, size: 12, color: fg),
           const SizedBox(width: 4),
-          Text(text, style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: fg)),
+          Text(
+            text,
+            style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: fg),
+          ),
         ],
       ),
     );
@@ -537,9 +535,7 @@ class _Preview extends StatelessWidget {
       );
     } else {
       final parsed = Lyrics.parse(m.lyrics);
-      final lines = parsed.isSynced
-          ? [for (final l in parsed.synced) (l.time, l.text)]
-          : [for (final l in (parsed.plain ?? '').split('\n')) (null, l)];
+      final lines = parsed.isSynced ? [for (final l in parsed.synced) (l.time, l.text)] : [for (final l in (parsed.plain ?? '').split('\n')) (null, l)];
       body = Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -590,10 +586,7 @@ class _Preview extends StatelessWidget {
                           ),
                         ),
                       Expanded(
-                        child: Text(
-                          text.isEmpty ? '♪' : text,
-                          style: theme.textTheme.bodyMedium?.copyWith(height: 1.45, fontWeight: FontWeight.w500),
-                        ),
+                        child: Text(text.isEmpty ? '♪' : text, style: theme.textTheme.bodyMedium?.copyWith(height: 1.45, fontWeight: FontWeight.w500)),
                       ),
                     ],
                   ),
@@ -605,10 +598,7 @@ class _Preview extends StatelessWidget {
       );
     }
     return DecoratedBox(
-      decoration: BoxDecoration(
-        color: scheme.surfaceContainerLow,
-        borderRadius: BorderRadius.circular(20),
-      ),
+      decoration: BoxDecoration(color: scheme.surfaceContainerLow, borderRadius: BorderRadius.circular(20)),
       child: body,
     );
   }
@@ -654,16 +644,12 @@ class LyricsCard extends StatelessWidget {
       LyricsChoice(none: true) => ('No lyrics', 'You chose to download this song without lyrics.', Icons.block_rounded),
       _ when picked != null && picked.imported => ('Lyrics from ${picked.fileName}', 'Will be $where.', Icons.folder_rounded),
       _ when picked != null => (
-          '“${picked.track}”${picked.artist.isEmpty ? '' : ' · ${picked.artist}'}',
-          '${picked.synced ? 'Synced lyrics' : 'Plain lyrics'} you picked, $where.',
-          Icons.lyrics_rounded,
-        ),
+        '“${picked.track}”${picked.artist.isEmpty ? '' : ' · ${picked.artist}'}',
+        '${picked.synced ? 'Synced lyrics' : 'Plain lyrics'} you picked, $where.',
+        Icons.lyrics_rounded,
+      ),
       _ when looking => ('Looking up lyrics…', 'Searching LRCLIB for this song.', Icons.lyrics_outlined),
-      _ when found != null => (
-          '“${found!.track}”${found!.artist.isEmpty ? '' : ' · ${found!.artist}'}',
-          'Synced lyrics found, $where.',
-          Icons.lyrics_rounded,
-        ),
+      _ when found != null => ('“${found!.track}”${found!.artist.isEmpty ? '' : ' · ${found!.artist}'}', 'Synced lyrics found, $where.', Icons.lyrics_rounded),
       _ when isSong => ('No synced lyrics found', 'Search LRCLIB yourself, or import a .lrc file.', Icons.search_off_rounded),
       _ => ('Add lyrics?', 'Search LRCLIB, or import a .lrc file for this song.', Icons.lyrics_outlined),
     };
@@ -682,11 +668,7 @@ class LyricsCard extends StatelessWidget {
           child: Row(
             children: [
               if (looking && choice == null)
-                SizedBox(
-                  width: 20,
-                  height: 20,
-                  child: CircularProgressIndicator(strokeWidth: 2.2, color: scheme.primary),
-                )
+                SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2.2, color: scheme.primary))
               else
                 Icon(icon, size: 20, color: scheme.primary),
               const SizedBox(width: 12),

@@ -17,6 +17,7 @@ import '../../core/platform/media_notification.dart';
 import '../../core/platform/native_bridge.dart';
 import '../../services/audio_tags.dart';
 import '../../services/lrc.dart';
+import '../../services/lyrics_store.dart';
 import '../../widgets/app_dialog.dart';
 import '../../widgets/brand.dart';
 import 'art_palette.dart';
@@ -129,7 +130,7 @@ class _AudioPlayerScreenState extends State<AudioPlayerScreen> {
 
   Future<void> _loadTags() async {
     final tags = await AudioTags.read(widget.path);
-    var lyrics = Lyrics.parse(tags.lyrics);
+    var lyrics = Lyrics.parse(tags.anyLyrics);
     // A .lrc saved next to the song (FetchNet's "Also keep a .lrc file").
     if (!lyrics.isSynced) {
       try {
@@ -139,6 +140,11 @@ class _AudioPlayerScreenState extends State<AudioPlayerScreen> {
           if (!fromFile.isEmpty) lyrics = fromFile;
         }
       } catch (_) {}
+    }
+    // FetchNet's own copy, kept when the song was downloaded.
+    if (!lyrics.isSynced) {
+      final kept = Lyrics.parse(await LyricsStore.load(widget.path));
+      if (kept.isSynced || lyrics.isEmpty) lyrics = kept.isEmpty ? lyrics : kept;
     }
     if (!mounted) return;
     // Title and lyrics now; the cover's colours fade in a moment later.

@@ -6,6 +6,7 @@ import 'package:fetchnet/core/app_prefs.dart';
 import 'package:fetchnet/engine/engine.dart';
 import 'package:fetchnet/models/download_models.dart';
 import 'package:fetchnet/models/media_info.dart';
+import 'package:fetchnet/services/audio_tags.dart';
 import 'package:fetchnet/services/download_manager.dart';
 import 'package:fetchnet/services/extra_settings.dart';
 import 'package:fetchnet/services/history_store.dart';
@@ -408,6 +409,70 @@ void main() {
       expect(manager.tasks, hasLength(2));
       expect(manager.tasks.where((t) => t.status == DownloadStatus.paused), hasLength(1));
       expect(engine.running, 1);
+    });
+
+    group('Lyrics picked on Home', () {
+      const song = DownloadOption(kind: MediaKind.audio, label: 'MP3', extension: 'mp3', formatArgs: ['-x', '--embed-metadata']);
+      const lrc = '[00:01.00] First line\n[00:02.00] Second line';
+
+      Future<DownloadTask> download(List<int> fileBytes, {String mode = 'embed', String ext = 'mp3'}) async {
+        await extras.setLyrics(true);
+        await extras.setLyricsMode(SubtitleMode.values.byName(mode));
+        await manager.enqueue(
+          info: MediaInfo(url: 'https://example.com/song', title: 'Song', raw: const {}),
+          option: song,
+          fileBaseName: 'Song',
+          lyricsText: lrc,
+        );
+        await _settle();
+        final task = manager.tasks.single;
+        final run = engine.last(task.id);
+        // They reach FFmpeg as the song's lyrics tag (not for a file only).
+        final at = run.args.indexOf('--postprocessor-args');
+        if (mode == 'file') {
+          expect(at, -1);
+        } else {
+          expect(run.args[at + 1], contains('lyrics=[00:01.00] First line'));
+        }
+        final out = File(p.join(root.path, 'Song.$ext'))..writeAsBytesSync(fileBytes);
+        run._lines.add('FNFILE|${out.path}');
+        await _settle();
+        run.finish(0);
+        for (var i = 0; i < 20; i++) {
+          await Future<void>.delayed(const Duration(milliseconds: 20));
+        }
+        return task;
+      }
+
+      List<int> id3WithLyrics(String text) {
+        final data = [3, ...latin1.encode('eng'), 0, ...utf8.encode(text)];
+        final frame = [...latin1.encode('USLT'), 0, 0, 0, data.length, 0, 0, ...data];
+        final n = frame.length;
+        return [...latin1.encode('ID3'), 3, 0, 0, (n >> 21) & 127, (n >> 14) & 127, (n >> 7) & 127, n & 127, ...frame, 0xFF, 0xFB, 0, 0];
+      }
+
+      test('inside the song: no .lrc when the song has them', () async {
+        await download(id3WithLyrics(lrc));
+        expect(File(p.join(root.path, 'Song.lrc')).existsSync(), isFalse);
+      });
+
+      test('an MP3 that came out without them (FFmpeg 7): FetchNet writes them in', () async {
+        await download(const [0xFF, 0xFB, 0x90, 0x00]);
+        expect(AudioTags.readSync(p.join(root.path, 'Song.mp3')).lyrics, lrc);
+        expect(File(p.join(root.path, 'Song.lrc')).existsSync(), isFalse);
+      });
+
+      test('another format that came out without them: a .lrc next to it', () async {
+        await download(const [0x1A, 0x45, 0xDF, 0xA3], ext: 'webm');
+        final lrcFile = File(p.join(root.path, 'Song.lrc'));
+        expect(lrcFile.existsSync(), isTrue);
+        expect(lrcFile.readAsStringSync(), lrc);
+      });
+
+      test('as a file: the .lrc is written', () async {
+        await download(const [0xFF, 0xFB, 0x90, 0x00], mode: 'file');
+        expect(File(p.join(root.path, 'Song.lrc')).readAsStringSync(), lrc);
+      });
     });
   });
 }

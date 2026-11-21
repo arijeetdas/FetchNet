@@ -35,6 +35,9 @@ class DownloadTask {
   /// Lyrics to save as a `.lrc` next to the finished file.
   String? lyricsFile;
 
+  /// Lyrics FFmpeg was asked to put inside the song (checked once it's done).
+  String? lyricsInside;
+
   final String id;
   final String url;
   final String title;

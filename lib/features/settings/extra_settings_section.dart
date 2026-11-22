@@ -8,8 +8,14 @@ import 'settings_widgets.dart';
 
 /// Settings → Extra Settings: subtitles, quick download presets, download
 /// limits and copied links.
+/// The Extra Settings cards, so Settings can place them in its sections.
+enum ExtraCard { subtitles, lyrics, presets, downloads, browser }
+
 class ExtraSettingsCards extends StatelessWidget {
-  const ExtraSettingsCards({super.key});
+  const ExtraSettingsCards({super.key, this.only = ExtraCard.values});
+
+  /// Which cards to show, in this order.
+  final List<ExtraCard> only;
 
   @override
   Widget build(BuildContext context) {
@@ -19,18 +25,12 @@ class ExtraSettingsCards extends StatelessWidget {
       listenable: Listenable.merge([s, services.engine.status]),
       builder: (context, _) {
         final ffmpeg = services.engine.status.value.ffmpegAvailable;
-        return Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            _SubtitlesCard(s: s, ffmpeg: ffmpeg),
-            const SizedBox(height: 12),
-            _LyricsCard(s: s, ffmpeg: ffmpeg),
-            const SizedBox(height: 12),
-            _PresetsCard(s: s),
-            const SizedBox(height: 12),
-            _DownloadsCard(s: s),
-            const SizedBox(height: 12),
-            SettingsCard(
+        final cards = <ExtraCard, Widget>{
+          ExtraCard.subtitles: _SubtitlesCard(s: s, ffmpeg: ffmpeg),
+          ExtraCard.lyrics: _LyricsCard(s: s, ffmpeg: ffmpeg),
+          ExtraCard.presets: _PresetsCard(s: s),
+          ExtraCard.downloads: _DownloadsCard(s: s),
+          ExtraCard.browser: SettingsCard(
               padding: const EdgeInsets.fromLTRB(18, 6, 18, 6),
               children: [
                 SwitchListTile(
@@ -38,7 +38,7 @@ class ExtraSettingsCards extends StatelessWidget {
                   value: s.blockAds,
                   onChanged: s.setBlockAds,
                   secondary: const _Glyph(Icons.shield_rounded),
-                  title: const Text('Block ads and trackers'),
+                  title: const _Title('Block ads and trackers'),
                   subtitle: const Text(
                     'In Browser Mode: ads, trackers and pop-ups of the sites you open are blocked.',
                   ),
@@ -49,11 +49,19 @@ class ExtraSettingsCards extends StatelessWidget {
                   value: s.detectClipboard,
                   onChanged: s.setDetectClipboard,
                   secondary: const _Glyph(Icons.content_paste_go_rounded),
-                  title: const Text('Detect copied links'),
+                  title: const _Title('Detect copied links'),
                   subtitle: const Text('When you come back to FetchNet with a link copied, Home offers to fetch it.'),
                 ),
               ],
             ),
+        };
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            for (final (i, c) in only.indexed) ...[
+              if (i > 0) const SizedBox(height: 12),
+              cards[c]!,
+            ],
           ],
         );
       },
@@ -67,13 +75,46 @@ class _Glyph extends StatelessWidget {
   final IconData icon;
 
   @override
+  Widget build(BuildContext context) => GradientGlyph(icon, size: 42);
+}
+
+/// A switch's title, in the weight of the other settings cards' titles.
+class _Title extends StatelessWidget {
+  const _Title(this.text);
+
+  final String text;
+
+  @override
+  Widget build(BuildContext context) =>
+      Text(text, style: Theme.of(context).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w900, fontSize: 15));
+}
+
+/// A card's title row: a gradient icon, a title and what it's about.
+class _Header extends StatelessWidget {
+  const _Header({required this.icon, required this.title, required this.subtitle});
+
+  final IconData icon;
+  final String title;
+  final String subtitle;
+
+  @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return Container(
-      width: 42,
-      height: 42,
-      decoration: BoxDecoration(color: scheme.primaryContainer, borderRadius: BorderRadius.circular(13)),
-      child: Icon(icon, color: scheme.onPrimaryContainer, size: 22),
+    final theme = Theme.of(context);
+    return Row(
+      children: [
+        GradientGlyph(icon, size: 42),
+        const SizedBox(width: 14),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(title, style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w900, fontSize: 15)),
+              const SizedBox(height: 2),
+              Text(subtitle, style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant, height: 1.35)),
+            ],
+          ),
+        ),
+      ],
     );
   }
 }
@@ -123,7 +164,7 @@ class _SubtitlesCard extends StatelessWidget {
           value: s.subtitles,
           onChanged: s.setSubtitles,
           secondary: const _Glyph(Icons.closed_caption_rounded),
-          title: const Text('Download subtitles'),
+          title: const _Title('Download subtitles'),
           subtitle: const Text('Saved with videos, on sites that have them (YouTube, Vimeo, TED and many more).'),
         ),
         AnimatedSize(
@@ -268,7 +309,7 @@ class _LyricsCard extends StatelessWidget {
           value: s.lyrics,
           onChanged: s.setLyrics,
           secondary: const _Glyph(Icons.lyrics_rounded),
-          title: const Text('Add lyrics to music'),
+          title: const _Title('Add lyrics to music'),
           subtitle: const Text(
             'Songs saved as audio get their synced lyrics, so music players show each line as it\'s sung.',
           ),
@@ -352,7 +393,7 @@ class _PresetsCard extends StatelessWidget {
     final scheme = theme.colorScheme;
     return SettingsCard(
       children: [
-        const SettingsRow(
+        const _Header(
           icon: Icons.bolt_rounded,
           title: 'Quick download presets',
           subtitle: 'Picked first in a video\'s formats, and used when downloading several videos of a playlist or channel at once.',
@@ -436,7 +477,7 @@ class _DownloadsCard extends StatelessWidget {
     final atOnce = s.maxConcurrent;
     return SettingsCard(
       children: [
-        const SettingsRow(
+        const _Header(
           icon: Icons.tune_rounded,
           title: 'Download behaviour',
           subtitle: 'Pause, resume and the queue are on the Downloads tab; unfinished downloads carry on when you open FetchNet again.',

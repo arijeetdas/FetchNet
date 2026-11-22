@@ -112,6 +112,11 @@ abstract class YtDlpEngine {
   /// Starts yt-dlp with [args], streaming its output.
   EngineRun start(String id, List<String> args);
 
+  /// Runs FFmpeg ([probe]: ffprobe) with [args], streaming every output
+  /// line; [cancel] with the same [id] stops it. Fails without FFmpeg.
+  EngineRun startFfmpeg(String id, List<String> args, {bool probe = false}) =>
+      FailedEngineRun('FFmpeg isn\'t available on this device.');
+
   /// Cancels a run started with [id] (via [run] or [start]).
   Future<void> cancel(String id);
 

@@ -4,6 +4,7 @@ import 'dart:io';
 
 import 'package:fetchnet/core/app_prefs.dart';
 import 'package:fetchnet/engine/engine.dart';
+import 'package:fetchnet/models/creator_job.dart';
 import 'package:fetchnet/models/download_models.dart';
 import 'package:fetchnet/models/media_info.dart';
 import 'package:fetchnet/services/audio_tags.dart';
@@ -23,8 +24,8 @@ class _Run extends EngineRun {
   final _lines = StreamController<String>.broadcast();
   final _done = Completer<EngineResult>();
 
-  void finish(int code, {String stderr = ''}) {
-    if (!_done.isCompleted) _done.complete(EngineResult(exitCode: code, stdout: '', stderr: stderr));
+  void finish(int code, {String stderr = '', String stdout = ''}) {
+    if (!_done.isCompleted) _done.complete(EngineResult(exitCode: code, stdout: stdout, stderr: stderr));
   }
 
   @override
@@ -59,6 +60,17 @@ class _Engine extends YtDlpEngine {
   EngineRun start(String id, List<String> args) {
     final run = _Run(args);
     (runs[id] ??= []).add(run);
+    return run;
+  }
+
+  /// FFmpeg / ffprobe runs, in order ([_Run.args] starts with 'probe' for
+  /// ffprobe).
+  final List<_Run> ffmpegRuns = [];
+
+  @override
+  EngineRun startFfmpeg(String id, List<String> args, {bool probe = false}) {
+    final run = _Run([if (probe) 'probe', ...args]);
+    ffmpegRuns.add(run);
     return run;
   }
 
@@ -472,6 +484,208 @@ void main() {
       test('as a file: the .lrc is written', () async {
         await download(const [0xFF, 0xFB, 0x90, 0x00], mode: 'file');
         expect(File(p.join(root.path, 'Song.lrc')).readAsStringSync(), lrc);
+      });
+    });
+
+    group('Creator jobs', () {
+      const clipVideo = DownloadOption(kind: MediaKind.video, label: '1080p', extension: 'mp4', formatArgs: ['-f', 'b']);
+
+      Future<void> pause() async {
+        for (var i = 0; i < 20; i++) {
+          await Future<void>.delayed(const Duration(milliseconds: 15));
+        }
+      }
+
+      Future<_Run> nextFfmpeg(int count) async {
+        for (var i = 0; i < 100 && engine.ffmpegRuns.length < count; i++) {
+          await Future<void>.delayed(const Duration(milliseconds: 10));
+        }
+        expect(engine.ffmpegRuns, hasLength(count));
+        return engine.ffmpegRuns.last;
+      }
+
+      Future<(DownloadTask, _Run)> start(CreatorJob job, {DownloadOption option = clipVideo}) async {
+        await manager.enqueue(
+          info: MediaInfo(url: 'https://example.com/v', title: 'Video', raw: const {}),
+          option: option,
+          fileBaseName: 'Video',
+          creator: job,
+        );
+        await _settle();
+        final task = manager.tasks.single;
+        return (task, engine.last(task.id));
+      }
+
+      String landscape = jsonEncode({
+        'streams': [
+          {'width': 1920, 'height': 1080},
+        ],
+      });
+
+      test('a clip downloads only its part; a landscape one is made 9:16 and replaces it', () async {
+        final (task, run) = await start(const CreatorJob.clip(
+          start: Duration(seconds: 70),
+          end: Duration(seconds: 100),
+          shorts: true,
+          background: ShortsBackground.blur,
+        ));
+        expect(run.args, containsAllInOrder(['--download-sections', '*70-100', '--force-keyframes-at-cuts']));
+        final clip = File(p.join(root.path, 'Video.webm'))..writeAsStringSync('clip');
+        run._lines.add('FNFILE|${clip.path}');
+        await _settle();
+        run.finish(0);
+
+        // ffprobe: landscape.
+        final probe = await nextFfmpeg(1);
+        expect(probe.args.first, 'probe');
+        probe.finish(0, stdout: landscape);
+        // FFmpeg: the Short, with progress.
+        final convert = await nextFfmpeg(2);
+        expect(convert.args, contains('libx264'));
+        expect(task.stage, 'Making it 9:16 for Shorts & Reels…');
+        convert._lines.add('out_time_us=15000000');
+        await pause();
+        expect(task.progress, closeTo(0.5, 0.01));
+        File(convert.args.last).writeAsStringSync('short');
+        convert.finish(0);
+        await pause();
+
+        expect(File(p.join(root.path, 'Video.mp4')).readAsStringSync(), 'short');
+        expect(clip.existsSync(), isFalse);
+        final entry = HistoryStore(prefs).entries.first;
+        expect(entry.filePath, p.join(root.path, 'Video.mp4'));
+        expect(entry.quality, contains('Clip 1:10–1:40 · 9:16'));
+      });
+
+      test('a portrait clip stays as it is', () async {
+        final (_, run) = await start(const CreatorJob.clip(start: Duration.zero, end: Duration(seconds: 10), shorts: true));
+        final clip = File(p.join(root.path, 'Video.mp4'))..writeAsStringSync('portrait');
+        run._lines.add('FNFILE|${clip.path}');
+        await _settle();
+        run.finish(0);
+        final probe = await nextFfmpeg(1);
+        probe.finish(0, stdout: jsonEncode({'streams': [{'width': 1080, 'height': 1920}]}));
+        await pause();
+        expect(engine.ffmpegRuns, hasLength(1));
+        expect(clip.readAsStringSync(), 'portrait');
+        expect(HistoryStore(prefs).entries.first.status, DownloadStatus.completed);
+      });
+
+      test("a clip FFmpeg can't convert is kept as downloaded", () async {
+        final (_, run) = await start(const CreatorJob.clip(start: Duration.zero, end: Duration(seconds: 10), shorts: true));
+        final clip = File(p.join(root.path, 'Video.mp4'))..writeAsStringSync('clip');
+        run._lines.add('FNFILE|${clip.path}');
+        await _settle();
+        run.finish(0);
+        (await nextFfmpeg(1)).finish(0, stdout: landscape);
+        (await nextFfmpeg(2)).finish(1, stderr: 'Unknown encoder');
+        await pause();
+        expect(clip.readAsStringSync(), 'clip');
+        expect(HistoryStore(prefs).entries.first.status, DownloadStatus.completed);
+      });
+
+      test('a snapshot: a piece in a work folder, only the picture is saved', () async {
+        const option = DownloadOption(kind: MediaKind.thumbnail, label: 'Snapshot', extension: 'jpg', formatArgs: ['-f', 'bv*/b']);
+        final (task, run) = await start(const CreatorJob.snapshot(at: Duration(seconds: 42)), option: option);
+        expect(run.args, containsAllInOrder(['--download-sections', '*42-44']));
+        final home = run.args[run.args.indexOf('-P') + 1].substring('home:'.length);
+        expect(p.isWithin(root.path, home) && home != root.path, isTrue);
+        final piece = File(p.join(home, 'Video.webm'))..writeAsStringSync('piece');
+        run._lines.add('FNFILE|${piece.path}');
+        await _settle();
+        run.finish(0);
+        final grab = await nextFfmpeg(1);
+        expect(grab.args, containsAllInOrder(['-frames:v', '1']));
+        expect(grab.args.last, p.join(root.path, 'Video.jpg'));
+        File(grab.args.last).writeAsStringSync('picture');
+        grab.finish(0);
+        await pause();
+        final entry = HistoryStore(prefs).entries.first;
+        expect(entry.filePath, p.join(root.path, 'Video.jpg'));
+        expect(entry.quality, contains('Snapshot at 0:42'));
+        expect(task.status, DownloadStatus.completed);
+      });
+
+      test('a part downloading through FFmpeg shows its progress', () async {
+        const merged = DownloadOption(kind: MediaKind.video, label: '1080p', extension: 'mp4', formatArgs: ['-f', 'bv+ba'], needsMerge: true);
+        final (task, run) = await start(const CreatorJob.clip(start: Duration(seconds: 70), end: Duration(seconds: 100)), option: merged);
+        run._lines.add('[download] Destination: /x/Video.f137.mp4');
+        await _settle();
+        expect(task.stage, 'Cutting the video…');
+        run._lines.add('frame=  240 fps= 33 q=28.0 size=  1024KiB time=00:00:15.00 bitrate=1706.1kbits/s');
+        await pause();
+        expect(task.progress, closeTo(0.25, 0.01)); // half the video part
+        run._lines.add('[download] Destination: /x/Video.f140.m4a');
+        run._lines.add('size=  100KiB time=00:00:30.00 bitrate=128.0kbits/s');
+        await pause();
+        expect(task.stage, 'Cutting the audio…');
+        expect(task.progress, closeTo(0.99, 0.01));
+        run.finish(1, stderr: 'stop');
+        await pause();
+      });
+
+      test("when FFmpeg can't download just the part: the whole video, cut on the device", () async {
+        final (task, run) = await start(const CreatorJob.clip(start: Duration(seconds: 70), end: Duration(seconds: 100)));
+        run.finish(1, stderr: 'ERROR: ffmpeg exited with code 1');
+        await pause();
+        final whole = engine.last(task.id);
+        expect(identical(whole, run), isFalse);
+        expect(whole.args, isNot(contains('--download-sections')));
+        expect(task.stage, 'Downloading the whole video to cut it…');
+        final home = whole.args[whole.args.indexOf('-P') + 1].substring('home:'.length);
+        expect(home, isNot(root.path));
+        final full = File(p.join(home, 'Video.webm'))..writeAsStringSync('whole');
+        whole._lines.add('FNFILE|${full.path}');
+        await _settle();
+        whole.finish(0);
+        final cut = await nextFfmpeg(1);
+        expect(cut.args, containsAllInOrder(['-ss', '70', '-i', full.path, '-t', '30']));
+        expect(cut.args, contains('libx264')); // exact cuts
+        expect(cut.args.last, p.join(root.path, 'Video.mp4'));
+        File(cut.args.last).writeAsStringSync('clip');
+        cut.finish(0);
+        await pause();
+        expect(HistoryStore(prefs).entries.first.filePath, p.join(root.path, 'Video.mp4'));
+        expect(HistoryStore(prefs).entries.first.status, DownloadStatus.completed);
+      });
+
+      test('a snapshot whose piece never arrived: the whole video, then the frame at the moment', () async {
+        const option = DownloadOption(kind: MediaKind.thumbnail, label: 'Snapshot', extension: 'jpg', formatArgs: ['-f', 'bv*/b']);
+        final (task, run) = await start(const CreatorJob.snapshot(at: Duration(seconds: 42)), option: option);
+        // yt-dlp said it was done, but no file came out.
+        run._lines.add('FNFILE|${p.join(root.path, 'missing.mp4')}');
+        await _settle();
+        run.finish(0);
+        await pause();
+        final whole = engine.last(task.id);
+        expect(whole.args, isNot(contains('--download-sections')));
+        final home = whole.args[whole.args.indexOf('-P') + 1].substring('home:'.length);
+        final full = File(p.join(home, 'Video.mp4'))..writeAsStringSync('whole');
+        whole._lines.add('FNFILE|${full.path}');
+        await _settle();
+        whole.finish(0);
+        final grab = await nextFfmpeg(1);
+        expect(grab.args, containsAllInOrder(['-ss', '42', '-i', full.path, '-frames:v', '1']));
+        File(grab.args.last).writeAsStringSync('picture');
+        grab.finish(0);
+        await pause();
+        expect(HistoryStore(prefs).entries.first.filePath, p.join(root.path, 'Video.jpg'));
+      });
+
+      test("an audio clip gets no lyrics (their times wouldn't match)", () async {
+        await extras.setLyrics(true);
+        await manager.enqueue(
+          info: MediaInfo(url: 'https://example.com/s', title: 'Artist - Song', raw: const {}, duration: 200),
+          option: audio,
+          fileBaseName: 'Song',
+          lyricsText: '[00:01.00] hi',
+          creator: const CreatorJob.clip(start: Duration(seconds: 10), end: Duration(seconds: 40)),
+        );
+        await _settle();
+        final task = manager.tasks.single;
+        expect(task.lyrics, isNull);
+        expect(task.lyricsText, isNull);
+        expect(engine.last(task.id).args, isNot(contains('--postprocessor-args')));
       });
     });
   });

@@ -363,6 +363,47 @@ class DesktopEngine extends YtDlpEngine {
   }
 
   @override
+  EngineRun startFfmpeg(String id, List<String> args, {bool probe = false}) {
+    final run = _DesktopRun(() => cancel(id));
+    () async {
+      await initialize();
+      final dir = _ffmpegDir;
+      final exe = dir == null ? null : File(p.join(dir, _exe(probe ? 'ffprobe' : 'ffmpeg')));
+      if (exe == null || !exe.existsSync()) {
+        run._finish(EngineResult(exitCode: -1, stdout: '', stderr: '${probe ? 'ffprobe' : 'FFmpeg'} isn\'t installed.'));
+        return;
+      }
+      try {
+        final process = await Process.start(exe.path, args, environment: _env);
+        _processes[id] = process;
+        final out = StringBuffer();
+        final err = StringBuffer();
+        Future<void> pipe(Stream<List<int>> s, StringBuffer into) => s
+            .transform(const Utf8Decoder(allowMalformed: true))
+            .transform(const LineSplitter())
+            .listen((line) {
+              into.writeln(line);
+              run._lines.add(line);
+            })
+            .asFuture<void>();
+        final done = Future.wait([pipe(process.stdout, out), pipe(process.stderr, err)]);
+        final code = await process.exitCode;
+        await done.catchError((_) => <void>[]);
+        _processes.remove(id);
+        run._finish(EngineResult(
+          exitCode: run._cancelled ? EngineRun.cancelledExitCode : code,
+          stdout: out.toString(),
+          stderr: err.toString(),
+        ));
+      } catch (e) {
+        _processes.remove(id);
+        run._finish(EngineResult(exitCode: -1, stdout: '', stderr: _short(e)));
+      }
+    }();
+    return run;
+  }
+
+  @override
   EngineRun start(String id, List<String> args, {bool collectStdout = false}) {
     final run = _DesktopRun(() => cancel(id));
     () async {

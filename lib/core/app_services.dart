@@ -10,6 +10,7 @@ import '../services/download_manager.dart';
 import '../services/extra_settings.dart';
 import '../services/fetch_service.dart';
 import '../services/history_store.dart';
+import '../services/creator_settings.dart';
 import '../services/lyrics_service.dart';
 import '../services/sites_service.dart';
 import '../services/storage_service.dart';
@@ -37,6 +38,7 @@ class AppServices {
     required this.youtubeStreams,
     required this.gallery,
     required this.extras,
+    required this.creator,
     required this.cookieArgs,
   })  : themeMode = ValueNotifier(prefs.themeMode),
         showAnimations = ValueNotifier(prefs.showAnimations);
@@ -44,7 +46,7 @@ class AppServices {
   /// [youtubeClient] lets tests feed YouTube data without the network.
   factory AppServices.create(AppPrefs prefs, {YouTubeClient? youtubeClient}) {
     final engine = YtDlpEngine.create(prefs);
-    final storage = StorageService();
+    final storage = StorageService(prefs.store);
     final history = HistoryStore(prefs);
     final youtube = YouTubeService(prefs, youtubeClient ?? YouTubeClient());
 
@@ -66,6 +68,7 @@ class AppServices {
       storage: storage,
       history: history,
       extras: extras,
+      creator: CreatorSettings(prefs.store),
       cookieArgs: cookieArgs,
       gallery: GalleryService(galleryEngine, prefs, cookieArgs: cookieArgs),
       downloads: DownloadManager(
@@ -113,6 +116,9 @@ class AppServices {
 
   /// Settings → Extra Settings.
   final ExtraSettings extras;
+
+  /// Settings → Creator Settings: clips, Shorts / Reels and snapshots.
+  final CreatorSettings creator;
 
   /// The browser's cookies for a link (see [FetchService.cookieArgs]).
   final CookieArgsProvider cookieArgs;

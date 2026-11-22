@@ -47,6 +47,7 @@ class MainActivity : FlutterActivity() {
     private var engineEvents: EventChannel.EventSink? = null
     private var galleryEvents: EventChannel.EventSink? = null
     private val galleryDl by lazy { GalleryDl(applicationContext) }
+    private val ffmpeg by lazy { Ffmpeg(applicationContext) }
     private var updaterEvents: EventChannel.EventSink? = null
     private val appUpdateInstaller by lazy {
         AppUpdateInstaller(this) { event -> mainHandler.post { updaterEvents?.success(event) } }
@@ -153,9 +154,34 @@ class MainActivity : FlutterActivity() {
                     }
                 }
 
+                // Starts FFmpeg (or ffprobe) and streams its output like "start".
+                "ffmpegStart" -> {
+                    val id = call.argument<String>("id") ?: ""
+                    val args = call.argument<List<String>>("args") ?: emptyList()
+                    val probe = call.argument<Boolean>("probe") ?: false
+                    result.success(null)
+                    executor.execute {
+                        // Its libraries are unpacked with yt-dlp's.
+                        val response = try {
+                            ensureEngine()
+                            ffmpeg.run(id, args, probe) { line ->
+                                mainHandler.post {
+                                    engineEvents?.success(mapOf("id" to id, "type" to "line", "line" to line))
+                                }
+                            }
+                        } catch (e: Throwable) {
+                            mapOf("exitCode" to -1, "out" to "", "err" to describe(e))
+                        }
+                        mainHandler.post {
+                            engineEvents?.success(response + mapOf("id" to id, "type" to "exit"))
+                        }
+                    }
+                }
+
                 "cancel" -> {
                     val id = call.argument<String>("id") ?: ""
-                    val killed = runCatching { YoutubeDL.getInstance().destroyProcessById(id) }.getOrDefault(false)
+                    val killed = ffmpeg.cancel(id) ||
+                        runCatching { YoutubeDL.getInstance().destroyProcessById(id) }.getOrDefault(false)
                     result.success(killed)
                 }
 

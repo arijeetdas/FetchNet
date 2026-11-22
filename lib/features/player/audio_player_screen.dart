@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
@@ -21,6 +22,7 @@ import '../../services/lyrics_store.dart';
 import '../../widgets/app_dialog.dart';
 import '../../widgets/brand.dart';
 import 'art_palette.dart';
+import 'player_visuals.dart';
 
 /// Plays a downloaded song or other audio in FetchNet's own player.
 Future<void> openAudioPlayer(BuildContext context, {required String path, String? title, String? artUrl}) {
@@ -175,6 +177,10 @@ class _AudioPlayerScreenState extends State<AudioPlayerScreen> {
     unawaited(_player.dispose());
     super.dispose();
   }
+
+  /// Shows synced line [i] as the one being sung (tests and screenshots).
+  @visibleForTesting
+  void debugShowLine(int i) => _line.value = i;
 
   // ───── Playback ─────
 
@@ -378,24 +384,9 @@ class _AudioPlayerScreenState extends State<AudioPlayerScreen> {
           child: Stack(
             fit: StackFit.expand,
             children: [
-              // FetchNet's background, and the cover's colours over it once
-              // known (a gentle fade, no jump).
-              const AuroraBackground(intensity: 0.9, child: SizedBox.expand()),
-              AnimatedOpacity(
-                opacity: art ? 1 : 0,
-                duration: const Duration(milliseconds: 600),
-                curve: Curves.easeOut,
-                child: AnimatedContainer(
-                  duration: const Duration(milliseconds: 600),
-                  decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                      begin: Alignment.topCenter,
-                      end: Alignment.bottomCenter,
-                      colors: [palette?.top ?? Colors.black, palette?.bottom ?? Colors.black],
-                    ),
-                  ),
-                ),
-              ),
+              // The cover's colours (or FetchNet's), drifting slowly while
+              // animations are on; a gentle fade when the colours change.
+              PlayerBackground(palette: palette),
               SafeArea(
                 child: LayoutBuilder(
                   builder: (context, c) {
@@ -469,15 +460,33 @@ class _AudioPlayerScreenState extends State<AudioPlayerScreen> {
               child: ScaleTransition(scale: Tween(begin: 0.97, end: 1.0).animate(a), child: child),
             ),
             child: _showLyrics
-                ? _LyricsView(key: const ValueKey('lyrics'), lyrics: _lyrics, line: _line, colors: colors, onSeek: _seekTo)
+                ? _LyricsView(key: const ValueKey('lyrics'), lyrics: _lyrics, line: _line, colors: colors, onSeek: _seekTo, scale: 1.1)
                 : Padding(
                     key: const ValueKey('art'),
-                    padding: const EdgeInsets.fromLTRB(28, 12, 28, 8),
-                    child: Column(
-                      children: [
-                        Expanded(child: Center(child: _cover(colors))),
-                        if (_lyrics.isSynced) _CurrentLine(lyrics: _lyrics, line: _line, colors: colors, onTap: () => setState(() => _showLyrics = true)),
-                      ],
+                    padding: const EdgeInsets.fromLTRB(24, 8, 24, 4),
+                    child: LayoutBuilder(
+                      builder: (context, box) {
+                        // The cover as big as fits, with the line being sung
+                        // right under it (not at the bottom of the screen).
+                        final synced = _lyrics.isSynced;
+                        final lineSpace = synced ? _CurrentLine.height + 18 : 0.0;
+                        final side = math.max(96.0, math.min(math.min(box.maxWidth, 440.0), box.maxHeight - lineSpace));
+                        return Center(
+                          child: SingleChildScrollView(
+                            physics: const NeverScrollableScrollPhysics(),
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                SizedBox(width: side, height: side, child: _cover(colors)),
+                                if (synced) ...[
+                                  const SizedBox(height: 18),
+                                  _CurrentLine(lyrics: _lyrics, line: _line, colors: colors, onTap: () => setState(() => _showLyrics = true)),
+                                ],
+                              ],
+                            ),
+                          ),
+                        );
+                      },
                     ),
                   ),
           ),
@@ -890,30 +899,26 @@ class _SeekBarState extends State<_SeekBar> {
         TextStyle time() => TextStyle(color: c.muted, fontSize: 12.5, fontWeight: FontWeight.w700, fontFeatures: const [FontFeature.tabularFigures()]);
         return Column(
           children: [
-            SliderTheme(
-              data: SliderTheme.of(context).copyWith(
-                trackHeight: _dragging == null ? 5 : 8,
-                activeTrackColor: c.accent,
-                inactiveTrackColor: c.fg.withValues(alpha: 0.16),
-                thumbColor: c.art ? Colors.white : c.accent,
-                overlayColor: c.accent.withValues(alpha: 0.18),
-                thumbShape: RoundSliderThumbShape(enabledThumbRadius: _dragging == null ? 6 : 9),
-                trackShape: const RoundedRectSliderTrackShape(),
-                overlayShape: const RoundSliderOverlayShape(overlayRadius: 18),
-              ),
-              child: Slider(
-                value: pos,
-                max: max,
-                onChangeStart: (v) => setState(() => _dragging = v),
-                onChanged: (v) => setState(() => _dragging = v),
-                onChangeEnd: (v) {
-                  widget.onSeek(Duration(milliseconds: v.round()));
+            StreamBuilder<bool>(
+              stream: player.stream.playing,
+              initialData: player.state.playing,
+              builder: (context, playing) => WavySeekBar(
+                value: pos / max,
+                playing: (playing.data ?? false) && _dragging == null,
+                active: c.accent,
+                inactive: c.fg.withValues(alpha: 0.18),
+                thumb: c.art ? Colors.white : c.accent,
+                label: total <= 0 ? null : '${_clock(pos ~/ 1000)} of ${_clock(max ~/ 1000)}',
+                onChangeStart: (f) => setState(() => _dragging = f * max),
+                onChanged: (f) => setState(() => _dragging = f * max),
+                onChangeEnd: (f) {
+                  widget.onSeek(Duration(milliseconds: (f * max).round()));
                   setState(() => _dragging = null);
                 },
               ),
             ),
             Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 22),
+              padding: const EdgeInsets.symmetric(horizontal: 10),
               child: Row(
                 children: [
                   Text(_clock(pos ~/ 1000), style: time()),
@@ -1047,36 +1052,63 @@ class _CurrentLine extends StatelessWidget {
   final _Colors colors;
   final VoidCallback onTap;
 
+  /// Room for two lines being sung and the next one.
+  static const height = 104.0;
+
   @override
   Widget build(BuildContext context) {
     return ValueListenableBuilder<int>(
       valueListenable: line,
       builder: (context, i, _) {
-        final text = i >= 0 && i < lyrics.synced.length ? lyrics.synced[i].text : '';
+        String at(int k) => k >= 0 && k < lyrics.synced.length ? lyrics.synced[k].text.trim() : '';
+        final text = at(i);
+        final next = at(i + 1);
         return GestureDetector(
           onTap: onTap,
+          behavior: HitTestBehavior.opaque,
           child: SizedBox(
-            height: 52,
-            child: Center(
-              child: AnimatedSwitcher(
-                duration: const Duration(milliseconds: 260),
-                transitionBuilder: (child, a) => FadeTransition(
-                  opacity: a,
-                  child: SlideTransition(
-                    position: Tween(begin: const Offset(0, 0.4), end: Offset.zero).animate(a),
-                    child: child,
-                  ),
+            height: height,
+            width: double.infinity,
+            child: AnimatedSwitcher(
+              duration: const Duration(milliseconds: 320),
+              switchInCurve: Curves.easeOutCubic,
+              switchOutCurve: Curves.easeInCubic,
+              transitionBuilder: (child, a) => FadeTransition(
+                opacity: a,
+                child: SlideTransition(
+                  position: Tween(begin: const Offset(0, 0.18), end: Offset.zero).animate(a),
+                  child: child,
                 ),
-                child: text.isEmpty
-                    ? Icon(Icons.graphic_eq_rounded, key: ValueKey(i), color: colors.muted, size: 22)
-                    : Text(
-                        text,
-                        key: ValueKey(i),
-                        maxLines: 2,
-                        textAlign: TextAlign.center,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(color: colors.fg, fontSize: 16, fontWeight: FontWeight.w800, height: 1.3),
-                      ),
+              ),
+              layoutBuilder: (current, previous) => Stack(alignment: Alignment.topCenter, children: [...previous, ?current]),
+              child: Column(
+                key: ValueKey(i),
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (text.isEmpty)
+                    Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 8),
+                      child: Icon(Icons.graphic_eq_rounded, color: colors.fg.withValues(alpha: 0.8), size: 30),
+                    )
+                  else
+                    Text(
+                      text,
+                      maxLines: 2,
+                      textAlign: TextAlign.center,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(color: colors.fg, fontSize: 22, fontWeight: FontWeight.w800, height: 1.25, letterSpacing: -0.2),
+                    ),
+                  if (next.isNotEmpty) ...[
+                    const SizedBox(height: 6),
+                    Text(
+                      next,
+                      maxLines: 1,
+                      textAlign: TextAlign.center,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(color: colors.fg.withValues(alpha: 0.5), fontSize: 15, fontWeight: FontWeight.w700, height: 1.3),
+                    ),
+                  ],
+                ],
               ),
             ),
           ),
@@ -1090,12 +1122,15 @@ class _CurrentLine extends StatelessWidget {
 /// bright, kept near the middle; tap a line to jump there). Scrolling by
 /// hand pauses the following for a few seconds.
 class _LyricsView extends StatefulWidget {
-  const _LyricsView({super.key, required this.lyrics, required this.line, required this.colors, required this.onSeek});
+  const _LyricsView({super.key, required this.lyrics, required this.line, required this.colors, required this.onSeek, this.scale = 1});
 
   final Lyrics lyrics;
   final ValueNotifier<int> line;
   final _Colors colors;
   final ValueChanged<Duration> onSeek;
+
+  /// Text size: a little bigger on phones.
+  final double scale;
 
   @override
   State<_LyricsView> createState() => _LyricsViewState();
@@ -1218,7 +1253,7 @@ class _LyricsViewState extends State<_LyricsView> {
                           style: DefaultTextStyle.of(context).style.merge(
                             TextStyle(
                               color: i == current ? c.fg : c.fg.withValues(alpha: i < current ? 0.32 : 0.45),
-                              fontSize: i == current ? 26 : 22,
+                              fontSize: (i == current ? 26 : 22) * widget.scale,
                               fontWeight: FontWeight.w800,
                               height: 1.3,
                               letterSpacing: -0.3,

@@ -28,20 +28,20 @@ Future<void> openDownloadedFile(BuildContext context, HistoryEntry entry) async 
     return;
   }
   // An audio download saved as .webm / .mp4 is still a song.
-  if (_isAudio(path) || (entry.kind == MediaKind.audio && _isVideo(path))) {
+  if (isAudioPath(path) || (entry.kind == MediaKind.audio && isVideoPath(path))) {
     // No picture inside the file: the video's thumbnail is the cover.
     final id = youTubeVideoId(entry.url);
     final art = entry.thumbnail ?? (id == null ? null : 'https://i.ytimg.com/vi/$id/hqdefault.jpg');
     await openAudioPlayer(context, path: path, title: entry.title, artUrl: art);
     return;
   }
-  if (_isVideo(path)) {
+  if (isVideoPath(path)) {
     await openVideoPlayer(context, path: path, title: entry.title);
     return;
   }
   final pictures = [
     for (final f in entry.allFiles)
-      if (_isPicture(f) && File(f).existsSync()) f,
+      if (isPicturePath(f) && File(f).existsSync()) f,
   ];
   if (pictures.isNotEmpty) {
     await showMediaPreview(
@@ -62,14 +62,25 @@ Future<void> openWithApp(BuildContext context, String path) async {
   if (!ok && context.mounted) showSnack(context, 'No app found to open this file.', kind: ToastKind.error);
 }
 
-bool _isPicture(String path) => const {'.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp', '.avif'}
+/// The saved picture (a path, when [fileThere]) and the download's
+/// thumbnail (a link; YouTube's for its videos), for a [MediaThumb].
+(String?, String?) entryPicture(HistoryEntry entry, {required bool fileThere}) {
+  final path = entry.filePath;
+  final id = youTubeVideoId(entry.url);
+  return (
+    fileThere && path != null && isPicturePath(path) ? path : null,
+    entry.thumbnail ?? (id == null ? null : 'https://i.ytimg.com/vi/$id/mqdefault.jpg'),
+  );
+}
+
+bool isPicturePath(String path) => const {'.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp', '.avif'}
     .contains(p.extension(path).toLowerCase());
 
-bool _isAudio(String path) =>
+bool isAudioPath(String path) =>
     const {'.mp3', '.m4a', '.opus', '.ogg', '.oga', '.flac', '.wav', '.aac', '.weba', '.alac', '.wma', '.mka', '.aiff'}
         .contains(p.extension(path).toLowerCase());
 
-bool _isVideo(String path) => const {'.mp4', '.m4v', '.webm', '.mkv', '.mov', '.avi', '.flv', '.3gp', '.ts', '.wmv'}
+bool isVideoPath(String path) => const {'.mp4', '.m4v', '.webm', '.mkv', '.mov', '.avi', '.flv', '.3gp', '.ts', '.wmv'}
     .contains(p.extension(path).toLowerCase());
 
 Future<void> deleteDownloadedFile(BuildContext context, HistoryEntry entry) async {
@@ -107,7 +118,8 @@ Future<void> shareFilePath(BuildContext context, String path, {String? title}) a
   }
 }
 
-Future<void> _shareLink(BuildContext context, HistoryEntry entry) async {
+/// Shares a download's link (Android), or copies it.
+Future<void> shareEntryLink(BuildContext context, HistoryEntry entry) async {
   if (NativeBridge.canShareNatively && await NativeBridge.shareText(entry.url, subject: entry.title)) return;
   await Clipboard.setData(ClipboardData(text: entry.url));
   if (context.mounted) showSnack(context, 'Link copied', kind: ToastKind.success);
@@ -157,31 +169,31 @@ class _FileActionsSheet extends StatelessWidget {
     final link = Uri.tryParse(entry.url);
     final hasLink = link != null && link.hasScheme && link.host.isNotEmpty;
 
-    final quick = <_QuickAction>[
+    final quick = <SheetQuickAction>[
       // Another app, for every kind of file (a tap on the file opens it in
       // FetchNet).
-      _QuickAction(
+      SheetQuickAction(
         icon: Icons.open_in_new_rounded,
         label: 'Open with',
         primary: true,
         onTap: () => _run(context, (c) => openWithApp(c, entry.filePath!)),
       ),
-      _QuickAction(
+      SheetQuickAction(
         icon: android ? Icons.share_rounded : Icons.copy_rounded,
         label: android ? 'Share' : 'Copy file',
         onTap: () => _run(context, (c) => shareDownloadedFile(c, entry)),
       ),
       if (desktop)
-        _QuickAction(
+        SheetQuickAction(
           icon: Icons.folder_open_rounded,
           label: 'Show in folder',
           onTap: () => _run(context, (_) => NativeBridge.revealInFolder(entry.filePath!)),
         )
       else if (hasLink)
-        _QuickAction(
+        SheetQuickAction(
           icon: Icons.link_rounded,
           label: 'Share link',
-          onTap: () => _run(context, (c) => _shareLink(c, entry)),
+          onTap: () => _run(context, (c) => shareEntryLink(c, entry)),
         ),
     ];
 
@@ -210,9 +222,9 @@ class _FileActionsSheet extends StatelessWidget {
                       spacing: 6,
                       runSpacing: 6,
                       children: [
-                        _Chip(text: kindLabel, highlighted: true),
-                        if (entry.quality.isNotEmpty) _Chip(text: entry.quality),
-                        _Chip(text: formatBytes(entry.sizeBytes)),
+                        SheetChip(text: kindLabel, highlighted: true),
+                        if (entry.quality.isNotEmpty) SheetChip(text: entry.quality),
+                        SheetChip(text: formatBytes(entry.sizeBytes)),
                       ],
                     ),
                   ],
@@ -254,7 +266,7 @@ class _FileActionsSheet extends StatelessWidget {
                 type: MaterialType.transparency,
                 child: Column(
                   children: [
-                    _MenuRow(
+                    SheetMenuRow(
                       icon: Icons.content_copy_rounded,
                       title: 'Copy link',
                       subtitle: link.host,
@@ -264,14 +276,14 @@ class _FileActionsSheet extends StatelessWidget {
                       }),
                     ),
                     _divider(scheme),
-                    _MenuRow(
+                    SheetMenuRow(
                       icon: Icons.open_in_new_rounded,
                       title: 'Open source page',
                       subtitle: link.host,
                       onTap: () => _run(context, (_) => launchUrl(link, mode: LaunchMode.externalApplication)),
                     ),
                     _divider(scheme),
-                    _MenuRow(
+                    SheetMenuRow(
                       icon: Icons.bolt_rounded,
                       title: 'Fetch again',
                       subtitle: 'Pick another quality or format',
@@ -301,8 +313,9 @@ class _FileActionsSheet extends StatelessWidget {
       Divider(height: 1, indent: 56, endIndent: 16, color: scheme.outlineVariant.withValues(alpha: 0.4));
 }
 
-class _QuickAction extends StatelessWidget {
-  const _QuickAction({required this.icon, required this.label, required this.onTap, this.primary = false});
+/// A big button in a row of quick actions (the first one on the gradient).
+class SheetQuickAction extends StatelessWidget {
+  const SheetQuickAction({super.key, required this.icon, required this.label, required this.onTap, this.primary = false});
 
   final IconData icon;
   final String label;
@@ -346,8 +359,9 @@ class _QuickAction extends StatelessWidget {
   }
 }
 
-class _MenuRow extends StatelessWidget {
-  const _MenuRow({required this.icon, required this.title, required this.onTap, this.subtitle});
+/// A row of an action list: an icon tile, a title, a detail and a chevron.
+class SheetMenuRow extends StatelessWidget {
+  const SheetMenuRow({super.key, required this.icon, required this.title, required this.onTap, this.subtitle});
 
   final IconData icon;
   final String title;
@@ -372,8 +386,9 @@ class _MenuRow extends StatelessWidget {
   }
 }
 
-class _Chip extends StatelessWidget {
-  const _Chip({required this.text, this.highlighted = false});
+/// A small label: a file's kind (on the gradient), quality or size.
+class SheetChip extends StatelessWidget {
+  const SheetChip({super.key, required this.text, this.highlighted = false});
 
   final String text;
   final bool highlighted;

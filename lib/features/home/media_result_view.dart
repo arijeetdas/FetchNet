@@ -9,7 +9,10 @@ import '../../core/format.dart';
 import '../../engine/engine.dart';
 import '../../models/media_info.dart';
 import '../../services/extra_settings.dart';
+import '../../models/creator_job.dart';
+import '../../services/creator_settings.dart';
 import '../../services/lyrics_service.dart';
+import 'creator_panels.dart';
 import 'lyrics_picker.dart';
 import '../../widgets/app_dialog.dart';
 import '../../widgets/brand.dart';
@@ -37,6 +40,45 @@ class MediaResultView extends StatefulWidget {
 
 class _MediaResultViewState extends State<MediaResultView> {
   late MediaKind _kind = widget.info.preferAudio ? MediaKind.audio : MediaKind.video;
+
+  // Creator Settings: a clip of the video / song, or a snapshot.
+  bool _clipVideo = false;
+  bool _clipAudio = false;
+  Duration _clipStart = Duration.zero;
+  Duration? _clipEnd;
+  Duration _snapshotAt = Duration.zero;
+
+  /// The video's length, when the site says it.
+  Duration? get _length {
+    final d = widget.info.duration;
+    return d == null || d <= 0 ? null : Duration(milliseconds: (d * 1000).round());
+  }
+
+  /// Live streams (and premieres) can't be cut.
+  bool get _live {
+    final raw = widget.info.raw;
+    return raw['is_live'] == true || raw['live_status'] == 'is_live' || raw['live_status'] == 'is_upcoming';
+  }
+
+  /// The clip's end: 30 seconds in (or the whole length) until it's set.
+  Duration _clipEndFor(Duration length) {
+    final end = _clipEnd ?? const Duration(seconds: 30);
+    return end > length ? length : end;
+  }
+
+  /// What a clip becomes when Shorts / Reels conversion is on.
+  String? _shortsNote(CreatorSettings creator) {
+    if (!creator.shorts) return null;
+    final raw = widget.info.raw;
+    final w = (raw['width'] as num?)?.toInt(), h = (raw['height'] as num?)?.toInt();
+    final bg = creator.shortsBackground == ShortsBackground.blur ? 'a blurred background' : 'black bars';
+    if (w != null && h != null && w > 0 && h > 0) {
+      return w > h
+          ? 'Landscape video: the clip becomes 9:16 portrait with $bg, for Shorts and Reels.'
+          : 'Already portrait: the clip stays as it is, ready for Shorts and Reels.';
+    }
+    return 'If the clip is landscape, it becomes 9:16 portrait with $bg, for Shorts and Reels.';
+  }
 
   /// The option picked on the current tab; `null` until the user picks one
   /// (the quick download preset's choice is selected meanwhile).
@@ -94,7 +136,7 @@ class _MediaResultViewState extends State<MediaResultView> {
     });
   }
 
-  Future<void> _download(DownloadOption option, {List<String>? subtitleLanguages}) async {
+  Future<void> _download(DownloadOption option, {List<String>? subtitleLanguages, CreatorJob? creator}) async {
     final services = AppScope.of(context);
     if (services.storage.downloadDir == null) {
       await services.storage.ensureDownloadDir(requestPermission: true);
@@ -104,22 +146,27 @@ class _MediaResultViewState extends State<MediaResultView> {
         return;
       }
     }
-    final name = await showRenameDialog(context, info: widget.info, option: option);
+    final name = await showRenameDialog(context, info: widget.info, option: option, nameSuffix: creator?.nameSuffix());
     if (name == null || !mounted) return;
-    // The lyrics picked in the popup, else the ones the card found.
+    // The lyrics picked in the popup, else the ones the card found (a clip
+    // gets none: their times wouldn't match).
     final choice = _lyricsChoice;
     await services.downloads.enqueue(
       info: widget.info,
       option: option,
       fileBaseName: name,
-      lyricsText: choice?.match?.lyrics ?? (choice == null ? _lyricsResult?.best?.lyrics : null),
-      noLyrics: choice?.none ?? false,
-      subtitleArgs: subtitleArgs(
-        services.extras,
-        option: option,
-        ffmpeg: services.engine.status.value.ffmpegAvailable,
-        languages: subtitleLanguages,
-      ),
+      creator: creator,
+      lyricsText: creator != null ? null : choice?.match?.lyrics ?? (choice == null ? _lyricsResult?.best?.lyrics : null),
+      noLyrics: creator != null || (choice?.none ?? false),
+      // Subtitles are for the whole video; a clip goes without.
+      subtitleArgs: creator != null
+          ? const []
+          : subtitleArgs(
+              services.extras,
+              option: option,
+              ffmpeg: services.engine.status.value.ffmpegAvailable,
+              languages: subtitleLanguages,
+            ),
     );
     if (!mounted) return;
     // Works from screens pushed over the main tabs (YouTube) too.
@@ -154,7 +201,7 @@ class _MediaResultViewState extends State<MediaResultView> {
   Widget build(BuildContext context) {
     final services = AppScope.of(context);
     return ListenableBuilder(
-      listenable: Listenable.merge([services.engine.status, services.youtube, services.extras]),
+      listenable: Listenable.merge([services.engine.status, services.youtube, services.extras, services.creator]),
       builder: (context, _) {
         final status = services.engine.status.value;
         final extras = services.extras;
@@ -167,14 +214,33 @@ class _MediaResultViewState extends State<MediaResultView> {
         final video = widget.info.videoOptions(ffmpeg: ffmpeg);
         final audio = widget.info.audioOptions(ffmpeg: ffmpeg);
         final thumbs = _thumbnailOptions ?? const <DownloadOption>[];
+
+        // Creator Settings: clips and snapshots (any site yt-dlp can cut).
+        final creator = services.creator;
+        final length = _length;
+        final cuttable = ffmpeg && length != null && length >= const Duration(seconds: 2) && !_live;
+        final snapshots = cuttable && creator.snapshots && video.isNotEmpty;
+        final snapshotFormat = creator.snapshotFormat;
+        final snapshotCard = snapshots
+            ? DownloadOption(
+                kind: MediaKind.thumbnail,
+                label: 'Snapshot',
+                detail: 'Any moment · ${snapshotFormat.label}',
+                extension: snapshotFormat.extension,
+                // The best picture (video only: the sound isn't needed).
+                formatArgs: const ['-f', 'bv*[height<=2160]/bv*/b'],
+              )
+            : null;
+
         var kind = _kind;
-        if (kind == MediaKind.thumbnail && !showThumbnails) kind = MediaKind.video;
+        if (kind == MediaKind.thumbnail && !showThumbnails && !snapshots) kind = MediaKind.video;
         if (kind == MediaKind.video && video.isEmpty && audio.isNotEmpty) kind = MediaKind.audio;
         if (kind == MediaKind.audio && audio.isEmpty && video.isNotEmpty) kind = MediaKind.video;
         final options = switch (kind) {
           MediaKind.video => video,
           MediaKind.audio => audio,
-          MediaKind.thumbnail => thumbs,
+          // A snapshot is one more card (after the sizes; alone on other sites).
+          MediaKind.thumbnail => [if (showThumbnails) ...thumbs, ?snapshotCard],
           // Posts and images have their own view (PostResultView).
           MediaKind.image || MediaKind.post || MediaKind.subtitle => const <DownloadOption>[],
         };
@@ -187,7 +253,58 @@ class _MediaResultViewState extends State<MediaResultView> {
             };
         final selected = options.isEmpty ? null : options[index.clamp(0, options.length - 1)];
         // Thumbnails are plain image downloads: no need to wait for yt-dlp.
-        final canDownload = selected != null && (kind == MediaKind.thumbnail || status.isReady);
+        var canDownload = selected != null && (kind == MediaKind.thumbnail || status.isReady);
+
+        // A clip of the video or song, or a snapshot of a moment.
+        final clipOn = cuttable &&
+            ((kind == MediaKind.video && creator.videoClips && _clipVideo) || (kind == MediaKind.audio && creator.audioClips && _clipAudio));
+        // Thumbnails and snapshots: a switch between them; snapshots alone: on.
+        final snapshotOn = kind == MediaKind.thumbnail && snapshotCard != null && identical(selected, snapshotCard);
+        Widget? creatorPanel;
+        String? downloadLabel;
+        VoidCallback? creatorDownload;
+        if (cuttable && ((kind == MediaKind.video && creator.videoClips) || (kind == MediaKind.audio && creator.audioClips))) {
+          final end = _clipEndFor(length);
+          final start = _clipStart >= end ? Duration.zero : _clipStart;
+          creatorPanel = ClipPanel(
+            wholeLabel: kind == MediaKind.video ? 'Whole video' : 'Whole audio',
+            on: clipOn,
+            onToggle: (v) => setState(() => kind == MediaKind.video ? _clipVideo = v : _clipAudio = v),
+            length: length,
+            start: start,
+            end: end,
+            note: kind == MediaKind.video ? _shortsNote(creator) : null,
+            onRange: (s, e) => setState(() {
+              _clipStart = s;
+              _clipEnd = e;
+            }),
+          );
+          if (clipOn && selected != null) {
+            final part = (end - start).inMilliseconds / length.inMilliseconds;
+            final size = selected.sizeBytes == null ? '' : '  ·  ~${formatBytes(selected.sizeBytes! * part)}';
+            downloadLabel = 'Download clip  ·  ${clockLabel(end - start)}$size';
+            final job = CreatorJob.clip(
+              start: start,
+              end: end,
+              exactCuts: creator.exactCuts,
+              shorts: kind == MediaKind.video && creator.shorts,
+              background: creator.shortsBackground,
+            );
+            creatorDownload = canDownload ? () => _download(selected, creator: job) : null;
+          }
+        } else if (snapshotOn) {
+          final last = length! - const Duration(milliseconds: 100);
+          final at = _snapshotAt > last ? last : _snapshotAt;
+          creatorPanel = SnapshotPanel(
+            length: length,
+            at: at,
+            onAt: (d) => setState(() => _snapshotAt = d),
+            formatLabel: snapshotFormat.label,
+            fps: (widget.info.raw['fps'] as num?)?.toDouble() ?? 30,
+          );
+          downloadLabel = 'Download snapshot  ·  ${clockLabel(at)}  ·  ${snapshotFormat.label}';
+          creatorDownload = status.isReady ? () => _download(selected!, creator: CreatorJob.snapshot(at: at, snapshotFormat: snapshotFormat)) : null;
+        }
 
         // Subtitles (Settings → Extra Settings), for videos that have any.
         final tracks = extras.subtitles && kind == MediaKind.video
@@ -200,15 +317,19 @@ class _MediaResultViewState extends State<MediaResultView> {
           kind: kind,
           videoCount: video.length,
           audioCount: audio.length,
-          showThumbnails: showThumbnails,
+          showThumbnails: showThumbnails || snapshots,
           thumbnailsLoading: showThumbnails && _thumbnailOptions == null,
-          thumbnailCount: _thumbnailOptions?.length,
+          thumbnailCount: showThumbnails && _thumbnailOptions != null ? _thumbnailOptions!.length + (snapshotCard == null ? 0 : 1) : null,
+          creatorPanel: creatorPanel,
+          downloadLabel: downloadLabel,
           options: options,
           selected: selected,
           ffmpegMissing: !ffmpeg && kind != MediaKind.thumbnail,
           canInstallFfmpeg: services.engine.canInstallComponents && status.state == EngineState.ready,
           tags: showTags ? widget.info.tags : null,
-          subtitles: tracks.isNotEmpty
+          subtitles: clipOn || snapshotOn
+              ? null
+              : tracks.isNotEmpty
               ? _SubtitlePicker(
                   tracks: tracks,
                   picked: picks,
@@ -224,13 +345,14 @@ class _MediaResultViewState extends State<MediaResultView> {
             _selected = null;
           }),
           onSelect: (o) => setState(() => _selected = options.indexOf(o)),
-          onDownload: canDownload
-              ? () => _download(
-                    selected,
-                    // A video without subtitles gets none; otherwise the picked tracks.
-                    subtitleLanguages: kind == MediaKind.video && extras.subtitles ? picks.toList() : null,
-                  )
-              : null,
+          onDownload: creatorDownload ??
+              (canDownload && !snapshotOn
+                  ? () => _download(
+                        selected,
+                        // A video without subtitles gets none; otherwise the picked tracks.
+                        subtitleLanguages: kind == MediaKind.video && extras.subtitles ? picks.toList() : null,
+                      )
+                  : null),
         );
 
         return LayoutBuilder(builder: (context, c) {
@@ -476,10 +598,18 @@ class _OptionPicker extends StatelessWidget {
     required this.onSelect,
     required this.onDownload,
     this.subtitles,
+    this.creatorPanel,
+    this.downloadLabel,
   });
 
   /// The subtitle picker (videos with subtitles, when they're turned on).
   final Widget? subtitles;
+
+  /// Clip or snapshot controls (Creator Settings).
+  final Widget? creatorPanel;
+
+  /// The Download button's text for a clip or a snapshot.
+  final String? downloadLabel;
 
   final MediaKind kind;
   final int videoCount;
@@ -557,7 +687,7 @@ class _OptionPicker extends StatelessWidget {
                   switch (kind) {
                     MediaKind.video => 'Pick a quality',
                     MediaKind.audio => 'Pick a format',
-                    MediaKind.thumbnail => 'Pick a size',
+                    MediaKind.thumbnail => options.isNotEmpty && options.every((o) => o.directUrl == null) ? 'Pick a moment' : 'Pick a size',
                     MediaKind.image || MediaKind.post || MediaKind.subtitle => 'Pick files',
                   },
                   key: ValueKey(kind),
@@ -595,15 +725,18 @@ class _OptionPicker extends StatelessWidget {
           const SizedBox(height: 12),
           _FfmpegHint(canInstall: canInstallFfmpeg),
         ],
+        if (creatorPanel != null) ...[
+          const SizedBox(height: 14),
+          creatorPanel!,
+        ],
         if (subtitles != null) ...[
           const SizedBox(height: 14),
           subtitles!,
         ],
         const SizedBox(height: 16),
         GradientButton(
-          label: sel == null
-              ? 'Download'
-              : 'Download ${sel.label}${sel.sizeBytes != null ? '  ·  ~${formatBytes(sel.sizeBytes)}' : ''}',
+          label: downloadLabel ??
+              (sel == null ? 'Download' : 'Download ${sel.label}${sel.sizeBytes != null ? '  ·  ~${formatBytes(sel.sizeBytes)}' : ''}'),
           icon: Icons.download_rounded,
           expand: true,
           height: 56,
@@ -833,7 +966,10 @@ class _ThumbnailCard extends StatelessWidget {
                     fallback: ColoredBox(color: scheme.surfaceContainerHighest, child: Icon(Icons.image_rounded, color: scheme.outline)),
                   )
                 else
-                  ColoredBox(color: scheme.surfaceContainerHighest),
+                  ColoredBox(
+                    color: scheme.primaryContainer.withValues(alpha: 0.6),
+                    child: Icon(Icons.camera_rounded, size: 34, color: scheme.onPrimaryContainer),
+                  ),
                 if (url != null)
                   Positioned(
                     left: 6,

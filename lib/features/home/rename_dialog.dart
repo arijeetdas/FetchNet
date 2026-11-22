@@ -17,19 +17,24 @@ Future<String?> showRenameDialog(
   BuildContext context, {
   required MediaInfo info,
   required DownloadOption option,
+  String? nameSuffix,
 }) {
   return showFetchNetDialog<String>(
     context: context,
     lockBack: false,
-    builder: (context) => _RenameDialog(info: info, option: option),
+    builder: (context) => _RenameDialog(info: info, option: option, nameSuffix: nameSuffix),
   );
 }
 
 class _RenameDialog extends StatefulWidget {
-  const _RenameDialog({required this.info, required this.option});
+  const _RenameDialog({required this.info, required this.option, this.nameSuffix});
 
   final MediaInfo info;
   final DownloadOption option;
+
+  /// Added to the title: "(clip 1m10s-1m40s)", "(at 0m42s)". A clip or a
+  /// snapshot isn't the same file as the whole video saved before.
+  final String? nameSuffix;
 
   @override
   State<_RenameDialog> createState() => _RenameDialogState();
@@ -60,7 +65,7 @@ class _RenameDialogState extends State<_RenameDialog> {
     if (onDisk) {
       return _numbered
           ? 'Files with this name already exist in FetchNet\'s Images, Audio or Video folder.'
-          : 'A file with this name already exists in the FetchNet/${MediaFolder.forKind(kind).folderName} folder.';
+          : 'A file with this name already exists in the ${storage.shortName(kind)} folder.';
     }
     final used = services.downloads.historyEntryNamed(name, kind);
     if (used != null) {
@@ -111,7 +116,9 @@ class _RenameDialogState extends State<_RenameDialog> {
   @override
   void initState() {
     super.initState();
-    final initial = StorageService.sanitizeFileName(widget.info.title);
+    final initial = StorageService.sanitizeFileName(
+      [widget.info.title, ?widget.nameSuffix].where((s) => s.trim().isNotEmpty).join(' '),
+    );
     _controller = TextEditingController(text: initial.isEmpty ? _random() : initial);
     _controller.selection = TextSelection(baseOffset: 0, extentOffset: _controller.text.length);
     _controller.addListener(() {
@@ -123,8 +130,9 @@ class _RenameDialogState extends State<_RenameDialog> {
       if (!mounted) return;
       final downloads = AppScope.of(context).downloads;
       setState(() => _copies = [
-            for (final e in downloads.savedCopiesOf(widget.info.url))
-              if (e.kind == widget.option.kind) e,
+            if (widget.nameSuffix == null)
+              for (final e in downloads.savedCopiesOf(widget.info.url))
+                if (e.kind == widget.option.kind) e,
           ]);
       _checkedText = _controller.text;
       final name = StorageService.sanitizeFileName(_controller.text);
@@ -193,9 +201,9 @@ class _RenameDialogState extends State<_RenameDialog> {
           children: [
             Text(
               _numbered
-                  ? 'Saved to Download/FetchNet as ${widget.option.label}${widget.option.detail != null ? ' (${widget.option.detail})' : ''}, '
+                  ? 'Saved to ${AppScope.of(context).storage.shortName()} as ${widget.option.label}${widget.option.detail != null ? ' (${widget.option.detail})' : ''}, '
                       'numbered (name 1, name 2, …) straight into its Images, Audio and Video folders.'
-                  : 'Saved to Download/FetchNet/${MediaFolder.forKind(widget.option.kind).folderName} as '
+                  : 'Saved to ${AppScope.of(context).storage.shortName(widget.option.kind)} as '
                       '${widget.option.label}${widget.option.detail != null ? ' (${widget.option.detail})' : ''}.',
               style: theme.textTheme.bodyMedium?.copyWith(color: scheme.onSurfaceVariant),
             ),

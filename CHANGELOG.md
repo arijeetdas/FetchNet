@@ -18,6 +18,33 @@ Versions follow `version: <name>+<build>` in `pubspec.yaml`.
 
 ---
 
+## 🚀 v1.3.3 — 2026-11-23
+
+> **Build 10** · Creator tools for clips, Shorts & Reels and snapshots, a save folder of your choice, and fresh Settings, Downloads, History and music player.
+
+### 🆕 New
+
+#### 🎬 Creator Settings
+
+- 🎬 **Creator Settings**, under YouTube Settings: tools that work on YouTube and most other sites, off until you turn them on.
+- ✂️ **Clips**: download just part of a video or song. Set the start and end with a slider, typed times, ±1 s nudges or quick lengths.
+- 📱 **Shorts & Reels**: landscape clips become 9:16 portrait without cropping, on black or a blurred copy of the video.
+- 📸 **Snapshots**: save one frame at full quality from the Thumbnail tab, as JPG or PNG.
+
+#### 📁 Save location
+
+- 📁 **Choose where downloads go** in Settings → Downloads. Download/FetchNet stays the default, and "Use default" brings it back.
+- 🗂️ Only the Images, Audio or Video folders that are missing get made; existing ones are used as they are.
+
+### 🛠️ Improved
+
+- ⚙️ **Settings**: redesigned, with theme previews and clear groups (two columns on large screens), plus new About FetchNet and Disclaimer popups.
+- 📥 **Downloads**: redesigned, with thumbnails, status pills, round pause, resume and cancel buttons, and saved files sorted into Videos, Music and Pictures.
+- 🕘 **History**: grouped by day with thumbnails and filter tiles, a new details popup for each download, and a Clear history popup that can clear just failed, missing or old downloads, with Undo.
+- 🎵 **Music player**: on phones the cover and the current line sit together with bigger lyrics, the seek bar is wavy, and the background drifts in the cover's colours (still when Show animations is off).
+
+---
+
 ## 🚀 v1.3.2 — 2026-11-22
 
 > **Build 9** · Lyrics that really show up in MP3s on Android, and one choice at a time in the lyrics list.

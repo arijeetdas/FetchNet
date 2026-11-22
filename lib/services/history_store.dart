@@ -73,5 +73,28 @@ class HistoryStore extends ChangeNotifier {
     await _save();
   }
 
+  /// Removes the entries [test] picks (say, the failed ones) and returns
+  /// them, for [restore].
+  Future<List<HistoryEntry>> removeWhere(bool Function(HistoryEntry) test) async {
+    final removed = _entries.where(test).toList();
+    if (removed.isEmpty) return removed;
+    _entries.removeWhere(test);
+    notifyListeners();
+    await _save();
+    return removed;
+  }
+
+  /// Puts back entries taken out by [removeWhere] or [clear] (Undo), in
+  /// date order, skipping any that came back meanwhile.
+  Future<void> restore(List<HistoryEntry> removed) async {
+    if (removed.isEmpty) return;
+    final merged = [..._entries, ...removed]..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+    _entries
+      ..clear()
+      ..addAll(dedupe(merged).take(_maxEntries));
+    notifyListeners();
+    await _save();
+  }
+
   Future<void> _save() => _prefs.setHistoryJson(_entries.map((e) => jsonEncode(e.toJson())).toList());
 }

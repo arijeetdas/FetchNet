@@ -4,22 +4,24 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/app_services.dart';
 import '../../core/platform/device_environment.dart';
-import '../../core/platform/native_bridge.dart';
 import '../../engine/engine.dart';
 import '../../services/sites_service.dart';
 import '../../widgets/app_dialog.dart';
 import '../../widgets/brand.dart';
 import '../../widgets/platform_logo.dart';
 import '../../widgets/motion/page_motions.dart';
+import '../../widgets/page_parts.dart';
 import '../../widgets/site_icon.dart';
-import '../onboarding/disclaimer_content.dart';
 import '../shell/home_shell.dart';
 import '../shell/update_banner.dart';
 import '../shell/whats_new_dialog.dart';
 import '../youtube/youtube_settings_screen.dart';
+import 'creator_settings_screen.dart';
 import 'about_dialog.dart';
 import 'engines_screen.dart';
 import 'extra_settings_section.dart';
+import 'info_dialogs.dart';
+import 'save_location_card.dart';
 import 'settings_widgets.dart';
 
 const fetchNetRepo = 'https://git-fetchnet.arijeet.in';
@@ -54,356 +56,268 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
   }
 
-  void _showDisclaimer() {
-    showFetchNetDialog<void>(
-      context: context,
-      barrierDismissible: true,
-      lockBack: false,
-      builder: (context) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(28)),
-        title: const Text('Disclaimer'),
-        content: const SizedBox(width: 520, child: SingleChildScrollView(child: DisclaimerBody())),
-        actions: [
-          DialogButton(
-            label: 'Close',
-            icon: Icons.check_circle_rounded,
-            primary: true,
-            onPressed: () => Navigator.pop(context),
-          ),
-        ],
-      ),
-    );
-  }
-
-  void _showAboutApp() {
-    final theme = Theme.of(context);
-    showFetchNetDialog<void>(
-      context: context,
-      barrierDismissible: true,
-      lockBack: false,
-      builder: (context) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(28)),
-        icon: const FetchNetLogo(size: 56),
-        title: const Text('About FetchNet'),
-        content: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 440),
-          child: Text(
-            'FetchNet is a lightweight, cross-platform interface for yt-dlp and gallery-dl. Paste a link, choose video '
-            'or audio in the quality you want, or pick the images and files of a post, and FetchNet saves them to '
-            'Download/FetchNet, sorted into Images, Audio and Video folders.\n\n'
-            'All the heavy lifting is done by yt-dlp (video and audio) and gallery-dl (images, galleries and posts), '
-            'free and open-source projects maintained by their own communities. FetchNet is not affiliated with '
-            'either of them.',
-            style: theme.textTheme.bodyMedium?.copyWith(height: 1.5),
-          ),
-        ),
-        actions: [
-          DialogButton(
-            label: 'Close',
-            icon: Icons.check_circle_rounded,
-            primary: true,
-            onPressed: () => Navigator.pop(context),
-          ),
-        ],
-      ),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     final services = AppScope.of(context);
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
 
-    // Phones: one list. Large screens: the sections in two columns (see the
-    // end of build).
-    final children = <Widget>[
-            const UpdateBanner(padding: EdgeInsets.only(top: 8)),
-            const Padding(
-              padding: EdgeInsets.only(top: 10),
-              child: Center(child: SettingsMotion()),
-            ),
+    Widget section(String label, List<Widget> body) => Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [SectionLabel(label), ...body],
+        );
 
-            // ───── Appearance ─────
-            const SectionLabel('Appearance'),
-            SettingsCard(
-              children: [
-                SettingsRow(
-                  icon: Icons.palette_rounded,
-                  title: 'Theme',
-                  subtitle: 'Follow the system, or pick light or dark.',
-                ),
-                const SizedBox(height: 12),
-                ValueListenableBuilder<ThemeMode>(
-                  valueListenable: services.themeMode,
-                  builder: (context, mode, _) => SizedBox(
-                    width: double.infinity,
-                    child: SegmentedButton<ThemeMode>(
-                      segments: const [
-                        ButtonSegment(value: ThemeMode.system, icon: Icon(Icons.brightness_auto_rounded), label: Text('System')),
-                        ButtonSegment(value: ThemeMode.light, icon: Icon(Icons.light_mode_rounded), label: Text('Light')),
-                        ButtonSegment(value: ThemeMode.dark, icon: Icon(Icons.dark_mode_rounded), label: Text('Dark')),
-                      ],
-                      selected: {mode},
-                      showSelectedIcon: false,
-                      onSelectionChanged: (s) => services.setThemeMode(s.first),
-                    ),
-                  ),
-                ),
-                const Divider(height: 28),
-                ValueListenableBuilder<bool>(
-                  valueListenable: services.showAnimations,
-                  builder: (context, on, _) => SwitchListTile(
-                    contentPadding: EdgeInsets.zero,
-                    value: on,
-                    onChanged: services.setShowAnimations,
-                    title: const Text('Show animations'),
-                    subtitle: const Text(
-                      'Play the animated icons on Home, Downloads, History and Settings. When off, they stay still.',
-                    ),
-                  ),
-                ),
-              ],
-            ),
-
-            // ───── Downloads ─────
-            const SectionLabel('Downloads'),
-            ListenableBuilder(
-              listenable: services.storage,
-              builder: (context, _) {
-                final dir = services.storage.downloadDir;
-                return SettingsCard(
-                  children: [
-                    SettingsRow(
-                      icon: Icons.folder_rounded,
-                      title: 'Save location',
-                      subtitle: dir == null
-                          ? (services.storage.error ?? 'Preparing…')
-                          : '$dir\nSorted into Images, Audio and Video folders',
-                      trailing: DeviceEnvironment.isDesktop && dir != null
-                          ? IconButton(
-                              tooltip: 'Open folder',
-                              onPressed: () => NativeBridge.openFolder(dir),
-                              icon: const Icon(Icons.open_in_new_rounded),
-                            )
-                          : null,
-                    ),
-                    if (DeviceEnvironment.isAndroid) ...[
-                      const SizedBox(height: 8),
-                      Text(
-                        'Videos appear in your Gallery / Photos app and audio in your music & file manager apps.',
-                        style: theme.textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
-                      ),
-                    ],
-                  ],
-                );
-              },
-            ),
-
-            // ───── YouTube ─────
-            const SectionLabel('YouTube Settings'),
-            ListenableBuilder(
-              listenable: services.youtube,
-              builder: (context, _) {
-                final yt = services.youtube;
-                final profile = yt.profile;
-                final subtitle = yt.signedIn
-                    ? 'Signed in as ${profile?.email ?? profile?.name ?? 'your Google account'}'
-                    : 'Sign in with Google, thumbnail downloads and video tags';
-                return SettingsCard(
-                  padding: EdgeInsets.zero,
-                  children: [
-                    ListTile(
-                      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-                      leading: yt.signedIn
-                          ? GoogleAvatar(profile: profile, size: 42)
-                          : const BrandGlyph(brand: SiteBrand.youtube, size: 40),
-                      title: const Text('YouTube', style: TextStyle(fontWeight: FontWeight.w800)),
-                      subtitle: Text(subtitle, maxLines: 2, overflow: TextOverflow.ellipsis),
-                      trailing: const Icon(Icons.chevron_right_rounded),
-                      onTap: () => Navigator.of(context).push(
-                        MaterialPageRoute(builder: (_) => const YouTubeSettingsScreen()),
-                      ),
-                    ),
-                  ],
-                );
-              },
-            ),
-
-            // ───── Extra Settings ─────
-            // Subtitles, quick download presets, download limits, copied links.
-            const SectionLabel('Extra Settings'),
-            const ExtraSettingsCards(),
-
-            // ───── Engines ─────
-            // Versions, updates, links and credits live on the Engines
-            // screen; the switches and add-ons stay here.
-            const SectionLabel('Engines'),
-            ListenableBuilder(
-              listenable: Listenable.merge([services.engine.status, services.engine.componentInstall]),
-              builder: (context, _) {
-                final status = services.engine.status.value;
-                final install = services.engine.componentInstall.value;
-                final supported = services.engine.isSupported;
-                final gallery = services.gallery.engine;
-                return SettingsCard(
-                  padding: EdgeInsets.zero,
-                  children: [
-                    const EnginesSummaryTile(),
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(18, 0, 18, 14),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          if (supported) ...[
-                            const Divider(height: 16),
-                            SwitchListTile(
-                              contentPadding: EdgeInsets.zero,
-                              value: services.prefs.autoUpdateEngine,
-                              onChanged: (v) async {
-                                await services.prefs.setAutoUpdateEngine(v);
-                                setState(() {});
-                              },
-                              title: const Text('Keep engines up to date'),
-                              subtitle: const Text('Sites change often. Checks for a new yt-dlp and gallery-dl once a day.'),
-                            ),
-                          ],
-                          if (gallery.isSupported) ...[
-                            const Divider(height: 16),
-                            SwitchListTile(
-                              contentPadding: EdgeInsets.zero,
-                              value: services.prefs.galleryEnabled,
-                              onChanged: (v) async {
-                                await services.prefs.setGalleryEnabled(v);
-                                if (v) gallery.initialize();
-                                setState(() {});
-                              },
-                              title: const Text('Images & posts'),
-                              subtitle: const Text('Uses gallery-dl to list the images, videos and audio in posts and galleries.'),
-                            ),
-                          ],
-                          if (services.engine.canInstallComponents) ...[
-                          const Divider(height: 16),
-                          SettingsRow(
-                            icon: Icons.movie_filter_rounded,
-                            title: 'FFmpeg',
-                            subtitle: status.ffmpegAvailable
-                                ? 'Installed — HD video and MP3 available'
-                                : 'Needed for HD video (merging) and MP3 conversion',
-                            trailing: status.ffmpegAvailable
-                                ? Icon(Icons.check_circle_rounded, color: scheme.primary)
-                                : FilledButton.tonal(
-                                    onPressed: install != null ? null : () => _install(EngineComponent.ffmpeg),
-                                    child: const Text('Install'),
-                                  ),
-                          ),
-                          const Divider(height: 24),
-                          SettingsRow(
-                            icon: Icons.javascript_rounded,
-                            title: 'JavaScript runtime',
-                            subtitle: status.jsRuntime != null
-                                ? 'Using ${status.jsRuntime}'
-                                : 'YouTube needs one for full quality options. Installs Deno.',
-                            trailing: status.jsRuntime != null
-                                ? Icon(Icons.check_circle_rounded, color: scheme.primary)
-                                : FilledButton.tonal(
-                                    onPressed: install != null ? null : () => _install(EngineComponent.jsRuntime),
-                                    child: const Text('Install'),
-                                  ),
-                          ),
-                          if (install != null) ...[
-                            const SizedBox(height: 14),
-                            Text(install.label, style: theme.textTheme.bodySmall),
-                            const SizedBox(height: 6),
-                            GradientProgressBar(value: install.progress, height: 6),
-                          ],
-                          ],
-                        ],
-                      ),
-                    ),
-                  ],
-                );
-              },
-            ),
-
-            // ───── About ─────
-            const SectionLabel('About'),
-            SettingsCard(
-              padding: EdgeInsets.zero,
-              children: [
-                ListTile(
-                  leading: const Icon(Icons.info_outline_rounded),
-                  title: const Text('About FetchNet'),
-                  subtitle: const Text('What this app does'),
-                  trailing: const Icon(Icons.chevron_right_rounded),
-                  onTap: _showAboutApp,
-                ),
-                const Divider(indent: 16, endIndent: 16),
-                ListTile(
-                  leading: const Icon(Icons.new_releases_outlined),
-                  title: const Text('What\'s new'),
-                  subtitle: const Text('Release notes for this version'),
-                  trailing: const Icon(Icons.chevron_right_rounded),
-                  onTap: () => showFullChangelog(context, services),
-                ),
-                const Divider(indent: 16, endIndent: 16),
-                ListTile(
-                  leading: const FetchNetLogo(size: 26, glow: false),
-                  title: const Text('FetchNet on GitHub'),
-                  subtitle: const Text('git-fetchnet.arijeet.in'),
-                  trailing: const Icon(Icons.open_in_new_rounded, size: 20),
-                  onTap: () => launchUrl(Uri.parse(fetchNetRepo), mode: LaunchMode.externalApplication),
-                ),
-                const Divider(indent: 16, endIndent: 16),
-                ListTile(
-                  leading: const Icon(Icons.gavel_rounded),
-                  title: const Text('Disclaimer'),
-                  subtitle: const Text('Terms you agreed to'),
-                  trailing: const Icon(Icons.chevron_right_rounded),
-                  onTap: _showDisclaimer,
-                ),
-              ],
-            ),
-            const SizedBox(height: 32),
-
-            // ───── Footer ─────
-            Center(
-              child: Column(
+    // ───── Appearance ─────
+    final appearance = section('Appearance', [
+      SettingsCard(
+        children: [
+          const _CardHeader(icon: Icons.palette_rounded, title: 'Theme', subtitle: 'Follow your device, or pick light or dark.'),
+          const SizedBox(height: 14),
+          ValueListenableBuilder<ThemeMode>(
+            valueListenable: services.themeMode,
+            builder: (context, mode, _) => IntrinsicHeight(
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  InkWell(
-                    onTap: _version.isEmpty ? null : () => showFetchNetAboutDialog(context, version: _version),
-                    borderRadius: BorderRadius.circular(20),
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
-                      decoration: BoxDecoration(
-                        color: scheme.surfaceContainerHighest.withValues(alpha: 0.6),
-                        borderRadius: BorderRadius.circular(20),
-                        border: Border.all(color: scheme.outlineVariant.withValues(alpha: 0.3)),
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          const PlatformLogo(size: 15),
-                          const SizedBox(width: 7),
-                          Text(
-                            'FetchNet for ${DeviceEnvironment.platformDisplayName}',
-                            style: theme.textTheme.labelMedium?.copyWith(
-                              color: scheme.onSurfaceVariant,
-                              fontWeight: FontWeight.w700,
-                            ),
-                          ),
-                        ],
+                  for (final (i, (m, label, hint)) in const [
+                    (ThemeMode.system, 'System', 'Like your device'),
+                    (ThemeMode.light, 'Light', 'Bright and clear'),
+                    (ThemeMode.dark, 'Dark', 'Easy on the eyes'),
+                  ].indexed) ...[
+                    if (i > 0) const SizedBox(width: 10),
+                    Expanded(
+                      child: ChoiceTile(
+                        selected: mode == m,
+                        onTap: () => services.setThemeMode(m),
+                        preview: _ThemePreview(mode: m),
+                        title: label,
+                        subtitle: hint,
                       ),
                     ),
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    'Developed by Arijeet Das',
-                    style: theme.textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant.withValues(alpha: 0.7)),
-                  ),
+                  ],
                 ],
               ),
             ),
+          ),
+          const SizedBox(height: 12),
+          ValueListenableBuilder<bool>(
+            valueListenable: services.showAnimations,
+            builder: (context, on, _) => ToggleRow(
+              icon: Icons.animation_rounded,
+              title: 'Show animations',
+              subtitle: 'Animated icons, the music player\'s moving background and the like.',
+              value: on,
+              onChanged: services.setShowAnimations,
+              last: true,
+            ),
+          ),
+        ],
+      ),
+    ]);
+
+    // ───── Downloads ─────
+    final downloads = section('Downloads', const [
+      SaveLocationCard(),
+      SizedBox(height: 12),
+      ExtraSettingsCards(only: [ExtraCard.presets, ExtraCard.downloads]),
+    ]);
+
+    // ───── YouTube and Creator Settings ─────
+    final sitesAndTools = section('Sites & tools', [
+      ListenableBuilder(
+        listenable: services.youtube,
+        builder: (context, _) {
+          final yt = services.youtube;
+          final profile = yt.profile;
+          return SettingsCard(
+            padding: EdgeInsets.zero,
+            children: [
+              NavTile(
+                leading: yt.signedIn ? GoogleAvatar(profile: profile, size: 42) : const BrandGlyph(brand: SiteBrand.youtube, size: 42),
+                title: 'YouTube Settings',
+                subtitle: yt.signedIn
+                    ? 'Signed in as ${profile?.email ?? profile?.name ?? 'your Google account'}'
+                    : 'Sign in with Google, thumbnail downloads, tags and cover art',
+                onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const YouTubeSettingsScreen())),
+              ),
+              Divider(height: 1, indent: 72, color: scheme.outlineVariant.withValues(alpha: 0.4)),
+              const CreatorSettingsTile(),
+            ],
+          );
+        },
+      ),
+    ]);
+
+    // ───── Extras: subtitles, lyrics, Browser Mode and copied links ─────
+    final extras = section('Extras', const [
+      ExtraSettingsCards(only: [ExtraCard.subtitles, ExtraCard.lyrics, ExtraCard.browser]),
+    ]);
+
+    // ───── Engines ─────
+    // Versions, updates, links and credits live on the Engines screen; the
+    // switches and add-ons stay here.
+    final engines = section('Engines', [
+      ListenableBuilder(
+        listenable: Listenable.merge([services.engine.status, services.engine.componentInstall]),
+        builder: (context, _) {
+          final status = services.engine.status.value;
+          final install = services.engine.componentInstall.value;
+          final supported = services.engine.isSupported;
+          final gallery = services.gallery.engine;
+          return SettingsCard(
+            padding: EdgeInsets.zero,
+            children: [
+              const EnginesSummaryTile(),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    if (supported)
+                      ToggleRow(
+                        icon: Icons.update_rounded,
+                        title: 'Keep engines up to date',
+                        subtitle: 'Sites change often: checks for a new yt-dlp and gallery-dl once a day.',
+                        value: services.prefs.autoUpdateEngine,
+                        onChanged: (v) async {
+                          await services.prefs.setAutoUpdateEngine(v);
+                          setState(() {});
+                        },
+                      ),
+                    if (gallery.isSupported)
+                      ToggleRow(
+                        icon: Icons.photo_library_rounded,
+                        title: 'Images & posts',
+                        subtitle: 'Uses gallery-dl to list the images, videos and audio of posts and galleries.',
+                        value: services.prefs.galleryEnabled,
+                        onChanged: (v) async {
+                          await services.prefs.setGalleryEnabled(v);
+                          if (v) gallery.initialize();
+                          setState(() {});
+                        },
+                      ),
+                    if (services.engine.canInstallComponents) ...[
+                      const SizedBox(height: 6),
+                      _AddOnRow(
+                        icon: Icons.movie_filter_rounded,
+                        title: 'FFmpeg',
+                        subtitle: status.ffmpegAvailable ? 'Installed: HD video, MP3, clips and Shorts' : 'Needed for HD video, MP3, clips and Shorts',
+                        installed: status.ffmpegAvailable,
+                        onInstall: install != null ? null : () => _install(EngineComponent.ffmpeg),
+                      ),
+                      const SizedBox(height: 6),
+                      _AddOnRow(
+                        icon: Icons.javascript_rounded,
+                        title: 'JavaScript runtime',
+                        subtitle: status.jsRuntime != null ? 'Using ${status.jsRuntime}' : 'YouTube needs one for every quality. Installs Deno.',
+                        installed: status.jsRuntime != null,
+                        onInstall: install != null ? null : () => _install(EngineComponent.jsRuntime),
+                      ),
+                      if (install != null) ...[
+                        const SizedBox(height: 14),
+                        Text(install.label, style: theme.textTheme.bodySmall),
+                        const SizedBox(height: 6),
+                        GradientProgressBar(value: install.progress, height: 6),
+                      ],
+                    ],
+                  ],
+                ),
+              ),
+            ],
+          );
+        },
+      ),
+    ]);
+
+    // ───── About ─────
+    final divider = Divider(height: 1, indent: 72, color: scheme.outlineVariant.withValues(alpha: 0.4));
+    final about = section('About', [
+      SettingsCard(
+        padding: EdgeInsets.zero,
+        children: [
+          NavTile(
+            leading: const SettingsGlyph(Icons.info_rounded),
+            title: 'About FetchNet',
+            subtitle: 'What this app does',
+            onTap: () => showAboutFetchNetDialog(context),
+          ),
+          divider,
+          NavTile(
+            leading: const SettingsGlyph(Icons.new_releases_rounded),
+            title: 'What\'s new',
+            subtitle: 'Release notes for this version',
+            onTap: () => showFullChangelog(context, services),
+          ),
+          divider,
+          NavTile(
+            leading: const SettingsGlyph(Icons.code_rounded),
+            title: 'FetchNet on GitHub',
+            subtitle: 'git-fetchnet.arijeet.in',
+            trailing: Icon(Icons.open_in_new_rounded, size: 20, color: scheme.onSurfaceVariant),
+            onTap: () => launchUrl(Uri.parse(fetchNetRepo), mode: LaunchMode.externalApplication),
+          ),
+          divider,
+          NavTile(
+            leading: const SettingsGlyph(Icons.gavel_rounded),
+            title: 'Disclaimer',
+            subtitle: 'Terms you agreed to',
+            onTap: () => showDisclaimerDialog(context),
+          ),
+        ],
+      ),
+    ]);
+
+    // ───── Footer ─────
+    final footer = Padding(
+      padding: const EdgeInsets.only(top: 32),
+      child: Center(
+        child: Column(
+          children: [
+            InkWell(
+              onTap: _version.isEmpty ? null : () => showFetchNetAboutDialog(context, version: _version),
+              borderRadius: BorderRadius.circular(20),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+                decoration: BoxDecoration(
+                  color: scheme.surfaceContainerHighest.withValues(alpha: 0.6),
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(color: scheme.outlineVariant.withValues(alpha: 0.3)),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const PlatformLogo(size: 15),
+                    const SizedBox(width: 7),
+                    Text(
+                      'FetchNet for ${DeviceEnvironment.platformDisplayName}',
+                      style: theme.textTheme.labelMedium?.copyWith(
+                        color: scheme.onSurfaceVariant,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Developed by Arijeet Das',
+              style: theme.textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant.withValues(alpha: 0.7)),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    final top = [
+      const UpdateBanner(padding: EdgeInsets.only(top: 8)),
+      Padding(
+        padding: const EdgeInsets.only(top: 10),
+        child: PageHero(
+          motion: (size) => SettingsMotion(size: size),
+          tagline: 'Make it yours: looks, downloads, sites and engines.',
+        ),
+      ),
     ];
 
     final wide = Breakpoints.isWide(context);
@@ -412,39 +326,207 @@ class _SettingsScreenState extends State<SettingsScreen> {
       leading: const PageGlyph(PageGlyphKind.settings),
       maxWidth: wide ? 1400 : 760,
       slivers: [
-        if (!wide)
-          SliverList.list(children: children)
-        else
-          SliverToBoxAdapter(
-            child: LayoutBuilder(
-              builder: (context, c) {
-                // Banner and animation | Appearance, Downloads, YouTube,
-                // Engines | Extra Settings, About | footer.
-                assert(children.length == 16, 'Update the column split below');
-                final top = children.sublist(0, 2);
-                final left = [...children.sublist(2, 8), ...children.sublist(10, 12)];
-                final right = [...children.sublist(8, 10), ...children.sublist(12, 14)];
-                final footer = children.sublist(14);
-                if (c.maxWidth < 900) return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: children);
+        SliverToBoxAdapter(
+          child: LayoutBuilder(
+            builder: (context, c) {
+              // Phones: one list. Large screens: two columns of whole
+              // sections (looks, downloads and engines | sites, extras and
+              // about).
+              if (!wide || c.maxWidth < 900) {
                 return Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    ...top,
-                    Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: left)),
-                        const SizedBox(width: 24),
-                        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: right)),
-                      ],
-                    ),
-                    ...footer,
-                  ],
+                  children: [...top, appearance, downloads, sitesAndTools, extras, engines, about, footer],
                 );
-              },
-            ),
+              }
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  ...top,
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Expanded(
+                        child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [appearance, downloads, engines]),
+                      ),
+                      const SizedBox(width: 24),
+                      Expanded(
+                        child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [sitesAndTools, extras, about]),
+                      ),
+                    ],
+                  ),
+                  footer,
+                ],
+              );
+            },
           ),
+        ),
       ],
     );
   }
+}
+
+/// A card's title row: a gradient icon, a title and what it's about.
+class _CardHeader extends StatelessWidget {
+  const _CardHeader({required this.icon, required this.title, required this.subtitle});
+
+  final IconData icon;
+  final String title;
+  final String subtitle;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Row(
+      children: [
+        GradientGlyph(icon),
+        const SizedBox(width: 14),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(title, style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w900)),
+              const SizedBox(height: 2),
+              Text(subtitle, style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// An add-on (FFmpeg, a JavaScript runtime): installed, or a button.
+class _AddOnRow extends StatelessWidget {
+  const _AddOnRow({required this.icon, required this.title, required this.subtitle, required this.installed, required this.onInstall});
+
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final bool installed;
+  final VoidCallback? onInstall;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    return Container(
+      padding: const EdgeInsets.fromLTRB(14, 10, 10, 10),
+      decoration: BoxDecoration(
+        color: installed ? scheme.primaryContainer.withValues(alpha: 0.45) : scheme.surfaceContainerHigh.withValues(alpha: 0.6),
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Row(
+        children: [
+          Icon(icon, size: 20, color: scheme.primary),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(title, style: theme.textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w800)),
+                Text(subtitle, style: theme.textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant)),
+              ],
+            ),
+          ),
+          const SizedBox(width: 8),
+          installed
+              ? const StatusChip(label: 'Installed', icon: Icons.check_circle_rounded, tone: ChipTone.good)
+              : FilledButton.tonal(onPressed: onInstall, child: const Text('Install')),
+        ],
+      ),
+    );
+  }
+}
+
+/// A tiny FetchNet window in the light or dark theme (System: both, split).
+class _ThemePreview extends StatelessWidget {
+  const _ThemePreview({required this.mode});
+
+  final ThemeMode mode;
+
+  @override
+  Widget build(BuildContext context) {
+    Widget screen(bool dark) {
+      final bg = dark ? const Color(0xFF1A1230) : const Color(0xFFF5F0FF);
+      final card = dark ? const Color(0xFF2A1F45) : Colors.white;
+      final line = dark ? const Color(0xFF4A3D6B) : const Color(0xFFE2D8F7);
+      return ColoredBox(
+        color: bg,
+        child: Padding(
+          padding: const EdgeInsets.all(7),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                width: 18,
+                height: 18,
+                decoration: BoxDecoration(gradient: AppColors.brandGradient, borderRadius: BorderRadius.circular(5)),
+              ),
+              const SizedBox(height: 6),
+              Expanded(
+                child: Container(
+                  decoration: BoxDecoration(color: card, borderRadius: BorderRadius.circular(6)),
+                  padding: const EdgeInsets.all(5),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      for (final w in const [0.9, 0.6, 0.75]) ...[
+                        FractionallySizedBox(
+                          widthFactor: w,
+                          child: Container(height: 4, decoration: BoxDecoration(color: line, borderRadius: BorderRadius.circular(2))),
+                        ),
+                        const SizedBox(height: 4),
+                      ],
+                      const Spacer(),
+                      Container(
+                        height: 8,
+                        decoration: BoxDecoration(gradient: AppColors.brandGradient, borderRadius: BorderRadius.circular(4)),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    return AspectRatio(
+      aspectRatio: 3 / 4,
+      child: Container(
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: Theme.of(context).colorScheme.outlineVariant),
+        ),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(11),
+          child: switch (mode) {
+            ThemeMode.light => screen(false),
+            ThemeMode.dark => screen(true),
+            ThemeMode.system => Row(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Expanded(child: ClipRect(child: OverflowBox(alignment: Alignment.centerLeft, maxWidth: double.infinity, child: _Half(child: screen(false))))),
+                  Expanded(child: ClipRect(child: OverflowBox(alignment: Alignment.centerRight, maxWidth: double.infinity, child: _Half(child: screen(true))))),
+                ],
+              ),
+          },
+        ),
+      ),
+    );
+  }
+}
+
+/// Lays a full-width screen out inside half of the preview (each half shows
+/// its side of the same picture).
+class _Half extends StatelessWidget {
+  const _Half({required this.child});
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) => LayoutBuilder(
+        builder: (context, c) => SizedBox(width: c.maxHeight * 3 / 4, child: child),
+      );
 }

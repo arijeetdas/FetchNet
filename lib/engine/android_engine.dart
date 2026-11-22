@@ -90,6 +90,22 @@ class AndroidEngine extends YtDlpEngine {
   }
 
   @override
+  EngineRun startFfmpeg(String id, List<String> args, {bool probe = false}) {
+    final run = _AndroidRun(() => cancel(id));
+    _runs[id] = run;
+    () async {
+      await initialize();
+      try {
+        await _channel.invokeMethod('ffmpegStart', {'id': id, 'args': args, 'probe': probe});
+      } on PlatformException catch (e) {
+        _runs.remove(id);
+        run._finish(EngineResult(exitCode: -1, stdout: '', stderr: e.message ?? e.code));
+      }
+    }();
+    return run;
+  }
+
+  @override
   Future<void> cancel(String id) async {
     try {
       await _channel.invokeMethod('cancel', {'id': id});

@@ -1,4 +1,5 @@
 import '../services/lyrics_service.dart';
+import 'creator_job.dart';
 import 'media_info.dart';
 
 enum DownloadStatus { queued, starting, downloading, processing, paused, completed, failed, cancelled }
@@ -20,6 +21,7 @@ class DownloadTask {
     this.lyrics,
     this.lyricsMode,
     this.lyricsText,
+    this.creator,
     DateTime? createdAt,
   }) : createdAt = createdAt ?? DateTime.now();
 
@@ -32,8 +34,21 @@ class DownloadTask {
   /// looking them up.
   final String? lyricsText;
 
+  /// A clip (maybe made 9:16 for Shorts / Reels) or a snapshot, instead of
+  /// the whole video or song.
+  final CreatorJob? creator;
+
   /// Lyrics to save as a `.lrc` next to the finished file.
   String? lyricsFile;
+
+  // A creator's part: yt-dlp hands the download of just that part to FFmpeg,
+  // which reports its own progress ([sectionPart]: video, then audio). When
+  // that fails or stalls, the whole video is downloaded and cut on the
+  // device instead ([cutLocally]).
+  bool cutLocally = false;
+  bool sectionStalled = false;
+  int sectionPart = 0;
+  DateTime? sectionActivity;
 
   /// Lyrics FFmpeg was asked to put inside the song (checked once it's done).
   String? lyricsInside;
@@ -236,6 +251,7 @@ class DownloadTask {
         if (lyrics != null) 'lyrics': lyrics!.toJson(),
         if (lyricsMode != null) 'lyricsMode': lyricsMode,
         if (lyricsText != null) 'lyricsText': lyricsText,
+        if (creator != null) 'creator': creator!.toJson(),
         'createdAt': createdAt.toIso8601String(),
         'status': switch (status) {
           DownloadStatus.paused => 'paused',
@@ -265,6 +281,7 @@ class DownloadTask {
         lyrics: LyricsQuery.fromJson(j['lyrics']),
         lyricsMode: j['lyricsMode'] as String?,
         lyricsText: j['lyricsText'] as String?,
+        creator: CreatorJob.fromJson(j['creator']),
         createdAt: DateTime.tryParse('${j['createdAt']}'),
       )
         ..status = switch (j['status']) {

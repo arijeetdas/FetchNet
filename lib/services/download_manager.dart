@@ -14,6 +14,7 @@ import '../models/media_info.dart';
 import 'extra_settings.dart';
 import 'fetch_service.dart';
 import 'history_store.dart';
+import '../models/creator_job.dart';
 import 'audio_tags.dart';
 import 'lyrics_service.dart';
 import 'lyrics_store.dart';
@@ -165,10 +166,12 @@ class DownloadManager extends ChangeNotifier {
     List<String> subtitleArgs = const [],
     String? lyricsText,
     bool noLyrics = false,
+    CreatorJob? creator,
   }) async {
     await _askNotificationPermissionOnce();
-    // A song saved as audio gets its synced lyrics, when they're turned on.
-    final song = option.kind == MediaKind.audio && option.directUrl == null && option.gallery == null;
+    // A song saved as audio gets its synced lyrics, when they're turned on
+    // (not a clip of it: the lyrics' times wouldn't match).
+    final song = option.kind == MediaKind.audio && option.directUrl == null && option.gallery == null && creator == null;
     final picked = song && !noLyrics && lyricsText != null && lyricsText.trim().isNotEmpty ? lyricsText : null;
     final lyrics = song && !noLyrics && picked == null && settings?.lyrics == true ? LyricsQuery.fromInfo(info) : null;
     final task = DownloadTask(
@@ -186,6 +189,7 @@ class DownloadManager extends ChangeNotifier {
       extractor: info.extractor,
       lyrics: lyrics,
       lyricsText: picked,
+      creator: creator,
       lyricsMode: lyrics == null && picked == null ? null : (settings?.lyricsMode ?? SubtitleMode.embed).name,
     );
     _tasks.insert(0, task);
@@ -363,6 +367,7 @@ class DownloadManager extends ChangeNotifier {
       lyrics: failed.lyrics,
       lyricsMode: failed.lyricsMode,
       lyricsText: failed.lyricsText,
+      creator: failed.creator,
     );
     _tasks.insert(0, task);
     notifyListeners();
@@ -518,6 +523,10 @@ class DownloadManager extends ChangeNotifier {
       return;
     }
     final temp = await storage.workDir('parts/${task.id}');
+    // A snapshot's short piece of video, or a whole download to cut a part
+    // from, goes to a work folder; only the result reaches the download folder.
+    final creatorWork = task.creator == null ? null : (await storage.workDir('creator/${task.id}')).path;
+    String ytHome() => creatorWork != null && (task.cutLocally || task.creator!.isSnapshot) ? creatorWork : dir;
     var extra = task.extraArgs;
     var retriesLeft = _autoRetries;
 
@@ -565,13 +574,43 @@ class DownloadManager extends ChangeNotifier {
     }
 
     while (true) {
-      final result = await _runYtDlp(task, dir, temp, [...extra, ...lyricsArgs]);
+      // Just a part: FFmpeg downloads it and reports its own progress. A part
+      // that makes no progress for a minute is given up on (below).
+      final sections = task.creator != null && !task.cutLocally;
+      Timer? watchdog;
+      if (sections) {
+        task
+          ..filePath = null
+          ..sectionPart = 0
+          ..sectionStalled = false
+          ..sectionActivity = DateTime.now().add(const Duration(seconds: 30)); // yt-dlp reads the page first
+        watchdog = Timer.periodic(const Duration(seconds: 5), (_) {
+          final last = task.sectionActivity;
+          if (last == null || task.status == DownloadStatus.processing) return;
+          if (DateTime.now().difference(last) > const Duration(seconds: 60)) {
+            task.sectionStalled = true;
+            unawaited(_runs[task.id]?.cancel());
+          }
+        });
+      }
+      final result = await _runYtDlp(task, ytHome(), temp, [...extra, ...lyricsArgs]);
+      watchdog?.cancel();
       // Paused: the partial files stay in the work folder for later.
       if (_pausing.containsKey(task.id)) {
         _settlePause(task);
         notifyListeners();
         _pump();
         return;
+      }
+      // FFmpeg couldn't download just the part (or stalled): download the
+      // whole video with yt-dlp's own downloader, and cut it on the device.
+      final partMissing = result.ok && (task.filePath == null || !File(task.filePath!).existsSync() || File(task.filePath!).lengthSync() == 0);
+      if (sections && task.stage != 'Cancelling…' && (task.sectionStalled || (!result.ok && !result.cancelled) || partMissing)) {
+        task
+          ..cutLocally = true
+          ..sectionStalled = false;
+        resetProgress(task.option.kind == MediaKind.audio ? 'Downloading the whole audio to cut it…' : 'Downloading the whole video to cut it…');
+        continue;
       }
       if (!result.ok && !result.cancelled && task.stage != 'Cancelling…') {
         final raw = result.stderr.isEmpty ? result.stdout : result.stderr;
@@ -623,6 +662,18 @@ class DownloadManager extends ChangeNotifier {
         final keepFile = task.lyricsMode != SubtitleMode.embed.name || lyricsArgs.isEmpty;
         if (lrc != null && keepFile) task.lyricsFile = lrc;
         task.lyricsInside = lyricsArgs.isEmpty ? null : lrc;
+        if (task.creator != null && !await _finishCreator(task, dir)) {
+          // Stopped while FFmpeg worked: paused, cancelled, or failed (said).
+          if (_pausing.containsKey(task.id)) {
+            _settlePause(task);
+          } else if (task.stage == 'Cancelling…') {
+            task.status = DownloadStatus.cancelled;
+            _tasks.remove(task);
+            await _record(task);
+            _finishNotification(task);
+          }
+          break;
+        }
         await _complete(task, dir);
       } else {
         final message = extractEngineError(result.stderr.isEmpty ? result.stdout : result.stderr);
@@ -645,6 +696,152 @@ class DownloadManager extends ChangeNotifier {
     } catch (_) {
       return false;
     }
+  }
+
+  /// A creator's download, once yt-dlp is done: a snapshot's picture from
+  /// the downloaded piece, or a landscape clip made 9:16 for Shorts / Reels
+  /// (a clip that's already portrait is left as it is). `false` when it
+  /// stopped: paused, cancelled, or a snapshot that couldn't be made
+  /// (reported). A clip FFmpeg can't convert is kept as downloaded.
+  Future<bool> _finishCreator(DownloadTask task, String dir, {bool cut = false}) async {
+    final job = task.creator!;
+    final source = task.filePath;
+    if (cut) task.cutLocally = false; // the part is cut: on to Shorts / Reels
+    if (source == null || !File(source).existsSync()) {
+      if (job.isSnapshot) {
+        _fail(task, 'The video couldn\'t be read at that moment.');
+        return false;
+      }
+      return true;
+    }
+    if (job.isSnapshot) {
+      task
+        ..status = DownloadStatus.processing
+        ..stage = 'Saving the snapshot…'
+        ..progress = null;
+      _throttledNotify(force: true);
+      final out = p.join(dir, '${task.fileBaseName}.${job.snapshotFormat.extension}');
+      // A whole download: the frame at the moment; else the piece's first.
+      final result = await _ffmpeg(
+        task,
+        snapshotArgs(input: source, output: out, format: job.snapshotFormat, seek: task.cutLocally ? job.snapshotAt : null),
+      );
+      unawaited(_cleanup(Directory(p.dirname(source))));
+      if (result.ok && File(out).existsSync()) {
+        task.filePath = out;
+        return true;
+      }
+      try {
+        if (File(out).existsSync()) File(out).deleteSync();
+      } catch (_) {}
+      if (!result.cancelled && !_pausing.containsKey(task.id) && task.stage != 'Cancelling…') {
+        _fail(task, 'FFmpeg couldn\'t save the snapshot.', hint: extractEngineError(result.stderr));
+      }
+      return false;
+    }
+    if (task.cutLocally && job.isClip) {
+      // The part, out of the whole download.
+      final video = task.option.kind == MediaKind.video;
+      final ext = video && job.exactCuts ? 'mp4' : p.extension(source).replaceFirst('.', '');
+      final out = p.join(dir, '${task.fileBaseName}.$ext');
+      task
+        ..status = DownloadStatus.processing
+        ..stage = 'Cutting the clip…'
+        ..progress = 0;
+      _throttledNotify(force: true);
+      final total = job.length.inMicroseconds;
+      final result = await _ffmpeg(
+        task,
+        cutArgs(input: source, output: out, job: job, video: video),
+        onLine: (line) {
+          if (total <= 0 || !line.startsWith('out_time_us=')) return;
+          final us = int.tryParse(line.substring('out_time_us='.length));
+          if (us == null || us < 0) return;
+          task.progress = (us / total).clamp(0.0, 0.99).toDouble();
+          _throttledNotify();
+        },
+      );
+      unawaited(_cleanup(Directory(p.dirname(source))));
+      if (!result.ok || !File(out).existsSync() || File(out).lengthSync() == 0) {
+        try {
+          if (File(out).existsSync()) File(out).deleteSync();
+        } catch (_) {}
+        if (!result.cancelled && !_pausing.containsKey(task.id) && task.stage != 'Cancelling…') {
+          _fail(task, 'FFmpeg couldn\'t cut the clip.', hint: extractEngineError(result.stderr));
+        }
+        return false;
+      }
+      task.filePath = out;
+      return _finishCreator(task, dir, cut: true);
+    }
+    if (!job.shorts || task.option.kind != MediaKind.video) return true;
+
+    // Is it landscape? (The picture as shown: a turned phone video counts.)
+    final probe = await _ffmpeg(task, probeArgs(source), probe: true);
+    if (probe.cancelled || _pausing.containsKey(task.id) || task.stage == 'Cancelling…') return false;
+    VideoShape? shape;
+    try {
+      shape = VideoShape.fromProbe((jsonDecode(probe.stdout) as Map).cast<String, dynamic>());
+    } catch (_) {}
+    if (shape == null || !shape.landscape) return true;
+
+    task
+      ..status = DownloadStatus.processing
+      ..stage = 'Making it 9:16 for Shorts & Reels…'
+      ..progress = 0;
+    _throttledNotify(force: true);
+    final base = p.join(p.dirname(source), p.basenameWithoutExtension(source));
+    final part = '$base.shorts.part.mp4';
+    final total = job.length.inMicroseconds;
+    final result = await _ffmpeg(
+      task,
+      shortsArgs(input: source, output: part, shape: shape, background: job.background),
+      onLine: (line) {
+        // FFmpeg's -progress: out_time_us=12345678
+        if (total <= 0 || !line.startsWith('out_time_us=')) return;
+        final us = int.tryParse(line.substring('out_time_us='.length));
+        if (us == null || us < 0) return;
+        task.progress = (us / total).clamp(0.0, 0.99).toDouble();
+        _throttledNotify();
+      },
+    );
+    if (result.ok && File(part).existsSync() && File(part).lengthSync() > 0) {
+      // The Short replaces the clip (always an MP4).
+      final out = '$base.mp4';
+      try {
+        if (File(source).existsSync()) File(source).deleteSync();
+        if (out != source && File(out).existsSync()) File(out).deleteSync();
+        File(part).renameSync(out);
+        task.filePath = out;
+      } catch (_) {
+        task.filePath = File(part).existsSync() ? part : source;
+      }
+      task.progress = 1;
+      return true;
+    }
+    try {
+      if (File(part).existsSync()) File(part).deleteSync();
+    } catch (_) {}
+    // Stopped by the user; otherwise the clip stays as it was downloaded.
+    return !(result.cancelled || _pausing.containsKey(task.id) || task.stage == 'Cancelling…');
+  }
+
+  String _sectionStage(DownloadTask task) {
+    final job = task.creator!;
+    if (job.isSnapshot) return 'Finding the moment…';
+    if (task.expectedParts > 1) return task.sectionPart <= 1 ? 'Cutting the video…' : 'Cutting the audio…';
+    return 'Cutting the clip…';
+  }
+
+  /// Runs FFmpeg (or ffprobe) for [task]; cancel / pause stop it like yt-dlp.
+  Future<EngineResult> _ffmpeg(DownloadTask task, List<String> args, {bool probe = false, void Function(String line)? onLine}) async {
+    final run = engine.startFfmpeg(task.id, args, probe: probe);
+    _runs[task.id] = run;
+    final sub = onLine == null ? null : run.lines.listen(onLine);
+    final result = await run.done;
+    await sub?.cancel();
+    _runs.remove(task.id);
+    return result;
   }
 
   /// The song's lyrics, once it's saved: FFmpeg's copy inside the file is
@@ -701,6 +898,7 @@ class DownloadManager extends ChangeNotifier {
     final rate = settings?.rateArg;
     final args = <String>[
       ...task.option.formatArgs,
+      if (!task.cutLocally) ...?task.creator?.ytDlpArgs(),
       ...extra,
       ...task.subtitleArgs,
       ...task.requestArgs,
@@ -973,6 +1171,35 @@ class DownloadManager extends ChangeNotifier {
   }
 
   void _onLine(DownloadTask task, String line) {
+    // A creator's part downloading through FFmpeg: its time= lines are the
+    // progress (yt-dlp itself reports nothing until the end).
+    final job = task.creator;
+    if (job != null && !task.cutLocally && task.status != DownloadStatus.processing) {
+      if (line.startsWith('[download] Destination:')) {
+        task
+          ..sectionPart += 1
+          ..sectionActivity = DateTime.now()
+          ..status = DownloadStatus.downloading
+          ..stage = _sectionStage(task);
+        _throttledNotify(force: true);
+        return;
+      }
+      final t = ffmpegTimeOf(line);
+      if (t != null) {
+        final span = job.isSnapshot ? CreatorJob.snapshotSpan : job.length;
+        final parts = task.expectedParts;
+        final index = (task.sectionPart - 1).clamp(0, parts - 1);
+        final done = span.inMilliseconds <= 0 ? 0.0 : (t.inMilliseconds / span.inMilliseconds).clamp(0.0, 1.0);
+        final progress = ((index + done) / parts).clamp(0.0, 0.99);
+        if ((task.progress ?? 0) < progress) task.progress = progress;
+        task
+          ..sectionActivity = DateTime.now()
+          ..status = DownloadStatus.downloading
+          ..stage = _sectionStage(task);
+        _throttledNotify();
+        return;
+      }
+    }
     if (line.startsWith('FNPROG|')) {
       final parts = line.split('|');
       double? num(int i) => i < parts.length ? double.tryParse(parts[i]) : null;
@@ -1072,7 +1299,11 @@ class DownloadManager extends ChangeNotifier {
       title: task.title,
       fileName: task.fileBaseName,
       kind: task.option.kind,
-      quality: [task.option.label, if (task.option.detail != null) task.option.detail!].join(' · '),
+      quality: [
+        task.option.label,
+        if (task.option.detail != null) task.option.detail!,
+        if (task.creator != null) task.creator!.describe(),
+      ].join(' · '),
       status: task.status,
       createdAt: task.createdAt,
       completedAt: DateTime.now(),

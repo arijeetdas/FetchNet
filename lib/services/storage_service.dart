@@ -4,6 +4,7 @@ import 'dart:math';
 import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../core/platform/native_bridge.dart';
 import '../models/media_info.dart';
@@ -44,11 +45,39 @@ enum MediaFolder {
   }
 }
 
-/// Owns the `Download/FetchNet` folder (with its `Images`, `Audio` and
-/// `Video` subfolders) and file naming rules.
+/// What happened when a save location was chosen.
+class FolderChange {
+  const FolderChange({this.error, this.created = const []});
+
+  /// Why the folder can't be used (nothing changed), or `null`.
+  final String? error;
+
+  /// The subfolders that were missing and were made (`Audio`, `Video`).
+  final List<String> created;
+
+  bool get ok => error == null;
+}
+
+/// Owns the FetchNet folder (`Download/FetchNet` unless the user picks
+/// another, see [chooseFolder]) with its `Images`, `Audio` and `Video`
+/// subfolders, and file naming rules.
 class StorageService extends ChangeNotifier {
+  StorageService([this._store]);
+
+  final SharedPreferences? _store;
   String? _downloadDir;
   String? _error;
+
+  static const _kCustomDir = 'downloads.custom_dir';
+
+  /// The folder the user chose, or `null` for the default.
+  String? get customDir => _store?.getString(_kCustomDir);
+  bool get isCustom => customDir != null;
+
+  /// Set when the chosen folder couldn't be used (a removed drive, a folder
+  /// without write access): downloads go to the default folder meanwhile.
+  String? get customProblem => _customProblem;
+  String? _customProblem;
 
   /// Absolute path of the FetchNet download folder, once resolved.
   String? get downloadDir => _downloadDir;
@@ -65,6 +94,29 @@ class StorageService extends ChangeNotifier {
       notifyListeners();
       return null;
     }
+    // The folder the user chose, when it can still be written to.
+    final custom = customDir;
+    if (custom != null) {
+      if (!await _permitted(requestPermission)) return null;
+      final problem = await _usable(custom);
+      if (problem == null) {
+        _downloadDir = custom;
+        _error = null;
+        _customProblem = null;
+        for (final f in MediaFolder.values) {
+          dirFor(f);
+        }
+        notifyListeners();
+        return _downloadDir;
+      }
+      _customProblem = 'Couldn\'t use $custom ($problem). Saving to the default folder for now.';
+    }
+    return _ensureDefault(requestPermission: requestPermission);
+  }
+
+  /// The default folder: `Download/FetchNet` (Android), `Downloads/FetchNet`
+  /// (computers).
+  Future<String?> _ensureDefault({required bool requestPermission}) async {
     try {
       if (Platform.isAndroid) {
         if (await NativeBridge.needsLegacyStoragePermission()) {
@@ -110,6 +162,111 @@ class StorageService extends ChangeNotifier {
       notifyListeners();
       return null;
     }
+  }
+
+  /// Android 10 and older: the storage permission (asked when [ask]).
+  Future<bool> _permitted(bool ask) async {
+    if (!Platform.isAndroid || !await NativeBridge.needsLegacyStoragePermission()) return true;
+    if (ask && await NativeBridge.requestPermission('storage')) return true;
+    _error = ask
+        ? 'Storage permission was denied. FetchNet can\'t save downloads without it.'
+        : 'Storage permission is needed to save into the Download folder.';
+    notifyListeners();
+    return false;
+  }
+
+  /// Where apps may save on Android 11 and newer (any kind of file): the
+  /// Download and Documents folders of the phone's storage.
+  static const androidSaveRoots = ['Download', 'Documents'];
+
+  /// The phone's shared storage (`/storage/emulated/0`).
+  static const _androidStorage = '/storage/emulated/0';
+
+  /// Why [path] can't hold FetchNet's downloads, or `null` when it can:
+  /// it's made if missing, its missing subfolders too, and a test file of
+  /// each kind (picture, song, video) is written and removed, which is how
+  /// Android shows which folders accept which files.
+  Future<String?> _usable(String path) async {
+    if (Platform.isAndroid) {
+      final norm = p.normalize(path);
+      final allowed = androidSaveRoots.any((r) => p.equals(norm, '$_androidStorage/$r') || p.isWithin('$_androidStorage/$r', norm));
+      if (!allowed) return 'Android only lets apps save inside the Download or Documents folder';
+    }
+    try {
+      final root = Directory(path);
+      if (!root.existsSync()) root.createSync(recursive: true);
+      for (final (folder, ext) in [(MediaFolder.images, 'jpg'), (MediaFolder.audio, 'mp3'), (MediaFolder.video, 'mp4')]) {
+        final dir = Directory(p.join(path, folder.folderName));
+        if (!dir.existsSync()) dir.createSync(recursive: true);
+        final probe = File(p.join(dir.path, '.fetchnet-write-test.$ext'));
+        probe.writeAsStringSync('');
+        probe.deleteSync();
+      }
+      return null;
+    } on FileSystemException catch (e) {
+      final os = e.osError?.message;
+      return os == null || os.isEmpty ? 'it can\'t be written to' : 'it can\'t be written to: $os';
+    } catch (e) {
+      return 'it can\'t be written to';
+    }
+  }
+
+  /// Saves downloads in [path] from now on (files already saved stay where
+  /// they are). Only the subfolders that are missing (`Images`, `Audio`,
+  /// `Video`) are made; existing ones are kept as they are.
+  Future<FolderChange> chooseFolder(String path) async {
+    final store = _store;
+    if (store == null) return const FolderChange(error: 'Settings aren\'t available.');
+    final target = p.normalize(path);
+    if (!await _permitted(true)) return FolderChange(error: _error);
+    final missing = [for (final f in MediaFolder.values) if (!Directory(p.join(target, f.folderName)).existsSync()) f.folderName];
+    final problem = await _usable(target);
+    if (problem == null) {
+      await store.setString(_kCustomDir, target);
+      _downloadDir = target;
+      _error = null;
+      _customProblem = null;
+      notifyListeners();
+      return FolderChange(created: missing);
+    }
+    // Leave nothing behind in a folder that can't be used.
+    for (final name in missing) {
+      try {
+        final d = Directory(p.join(target, name));
+        if (d.existsSync() && d.listSync().isEmpty) d.deleteSync();
+      } catch (_) {}
+    }
+    return FolderChange(error: 'This folder can\'t be used: $problem.');
+  }
+
+  /// Back to the default folder (`Download/FetchNet`).
+  Future<String?> useDefaultFolder() async {
+    await _store?.remove(_kCustomDir);
+    _customProblem = null;
+    return ensureDownloadDir(requestPermission: true);
+  }
+
+  /// "Download/FetchNet", "Media/Clips": the end of the folder's path, for
+  /// short messages.
+  String shortName([MediaKind? kind]) {
+    final root = _downloadDir;
+    if (root == null) return 'Download/FetchNet';
+    final parts = p.split(root).where((s) => s.isNotEmpty && s != p.separator && !s.endsWith(':\\')).toList();
+    final tail = parts.length <= 2 ? parts : parts.sublist(parts.length - 2);
+    final base = tail.isEmpty ? root : tail.join('/');
+    return kind == null ? base : '$base/${MediaFolder.forKind(kind).folderName}';
+  }
+
+  /// The folder as people know it: "Internal storage › Download › FetchNet"
+  /// on Android, the full path elsewhere.
+  String displayPath([String? path]) {
+    final root = path ?? _downloadDir;
+    if (root == null) return '';
+    if (!kIsWeb && Platform.isAndroid && root.startsWith(_androidStorage)) {
+      final rest = root.substring(_androidStorage.length).split('/').where((s) => s.isNotEmpty);
+      return ['Internal storage', ...rest].join(' › ');
+    }
+    return root;
   }
 
   /// `Download/FetchNet/Images` (or `Audio`, `Video`), created when missing.

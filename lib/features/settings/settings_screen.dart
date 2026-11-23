@@ -16,6 +16,8 @@ import '../shell/home_shell.dart';
 import '../shell/update_banner.dart';
 import '../shell/whats_new_dialog.dart';
 import '../youtube/youtube_settings_screen.dart';
+import '../../ui_kit/glass_tuning.dart';
+import '../../ui_kit/kit.dart';
 import 'creator_settings_screen.dart';
 import 'about_dialog.dart';
 import 'engines_screen.dart';
@@ -108,7 +110,29 @@ class _SettingsScreenState extends State<SettingsScreen> {
               subtitle: 'Animated icons, the music player\'s moving background and the like.',
               value: on,
               onChanged: services.setShowAnimations,
-              last: true,
+            ),
+          ),
+          ValueListenableBuilder<bool>(
+            valueListenable: services.liquidGlass,
+            builder: (context, on, _) => Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                ToggleRow(
+                  icon: Icons.blur_on_rounded,
+                  title: 'Liquid Glass',
+                  subtitle: 'Applies Glass Effect on UI elements',
+                  value: on,
+                  onChanged: services.setLiquidGlass,
+                  last: !on,
+                ),
+                // Only with Liquid Glass on: how it looks.
+                AnimatedSize(
+                  duration: const Duration(milliseconds: 250),
+                  curve: Curves.easeOutCubic,
+                  alignment: Alignment.topCenter,
+                  child: on ? const _GlassTuningControls() : const SizedBox(width: double.infinity),
+                ),
+              ],
             ),
           ),
         ],
@@ -361,6 +385,76 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
         ),
       ],
+    );
+  }
+}
+
+/// Liquid Glass's opacity, reflection and refraction (reflection and
+/// refraction start off: plain frosted glass).
+class _GlassTuningControls extends StatelessWidget {
+  const _GlassTuningControls();
+
+  @override
+  Widget build(BuildContext context) {
+    final services = AppScope.of(context);
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    return ValueListenableBuilder<GlassTuning>(
+      valueListenable: services.glassTuning,
+      builder: (context, t, _) {
+        Widget row(IconData icon, String title, String hint, double value, GlassTuning Function(double) change, {bool offAtZero = true}) {
+          final pct = (value * 100).round();
+          return Padding(
+            padding: const EdgeInsets.fromLTRB(14, 10, 14, 0),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Row(
+                  children: [
+                    Icon(icon, size: 18, color: scheme.primary),
+                    const SizedBox(width: 10),
+                    Expanded(child: Text(title, style: theme.textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w800))),
+                    Text(
+                      offAtZero && pct == 0 ? 'Off' : '$pct%',
+                      style: theme.textTheme.labelLarge?.copyWith(color: scheme.primary, fontWeight: FontWeight.w800),
+                    ),
+                  ],
+                ),
+                Padding(
+                  padding: const EdgeInsets.only(left: 28),
+                  child: Text(hint, style: theme.textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant)),
+                ),
+                const SizedBox(height: 4),
+                KitSlider(
+                  value: value,
+                  divisions: 20,
+                  onChanged: (v) => services.setGlassTuning(change(v), save: false),
+                  onChangeEnd: (v) => services.setGlassTuning(change(v)),
+                ),
+              ],
+            ),
+          );
+        }
+
+        return Container(
+          margin: const EdgeInsets.only(top: 6),
+          padding: const EdgeInsets.only(bottom: 8),
+          decoration: BoxDecoration(
+            color: scheme.surfaceContainerHigh.withValues(alpha: 0.5),
+            borderRadius: BorderRadius.circular(18),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              row(Icons.opacity_rounded, 'Opacity', 'How much the glass is tinted.', t.opacity, (v) => t.copyWith(opacity: v), offAtZero: false),
+              row(Icons.flare_rounded, 'Reflection', 'Light catching on the glass: highlights and a glowing edge.', t.reflection,
+                  (v) => t.copyWith(reflection: v)),
+              row(Icons.lens_blur_rounded, 'Refraction', 'The glass bending what\'s behind it, like a lens, with colour at its edges.',
+                  t.refraction, (v) => t.copyWith(refraction: v)),
+            ],
+          ),
+        );
+      },
     );
   }
 }

@@ -11,6 +11,7 @@ import '../../services/storage_service.dart';
 import '../../widgets/app_dialog.dart';
 import '../../widgets/brand.dart';
 import 'settings_widgets.dart';
+import '../../ui_kit/kit.dart';
 
 /// Settings → Save location: where downloads go (Download/FetchNet unless
 /// another folder is chosen), its Images, Audio and Video folders, and
@@ -43,7 +44,8 @@ class _SaveLocationCardState extends State<SaveLocationCard> {
       await _explain('This folder isn\'t on the phone\'s own storage.');
       return;
     }
-    if (storage.downloadDir != null && p.equals(p.normalize(picked), p.normalize(storage.downloadDir!))) return;
+    final folder = StorageService.fetchNetFolderIn(picked);
+    if (storage.downloadDir != null && p.equals(folder, p.normalize(storage.downloadDir!))) return;
     setState(() => _busy = true);
     final change = await storage.chooseFolder(picked);
     if (!mounted) return;
@@ -66,7 +68,7 @@ class _SaveLocationCardState extends State<SaveLocationCard> {
         context: context,
         barrierDismissible: true,
         lockBack: false,
-        builder: (context) => AlertDialog(
+        builder: (context) => KitAlertDialog(
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(28)),
           icon: const Icon(Icons.folder_off_rounded),
           title: const Text('Can\'t save there'),
@@ -215,10 +217,10 @@ class _SaveLocationCardState extends State<SaveLocationCard> {
             TipBox(
               icon: Icons.info_outline_rounded,
               text: DeviceEnvironment.isAndroid
-                  ? 'Choose any folder inside Download or Documents. Missing Images, Audio and Video folders are made for you; '
-                      'videos show in your Gallery and songs in music apps.'
-                  : 'Choose any folder you can write to. Missing Images, Audio and Video folders are made for you; '
-                      'files you already saved stay where they are.',
+                  ? 'Choose any folder inside Download or Documents: downloads go to a FetchNet folder in it, sorted into '
+                      'Images, Audio and Video (any that are missing are made). Videos show in your Gallery and songs in music apps.'
+                  : 'Choose any folder you can write to: downloads go to a FetchNet folder in it, sorted into Images, Audio '
+                      'and Video (any that are missing are made). Files you already saved stay where they are.',
             ),
           ],
         );

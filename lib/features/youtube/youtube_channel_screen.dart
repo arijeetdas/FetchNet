@@ -7,6 +7,7 @@ import '../../widgets/app_dialog.dart';
 import '../../widgets/brand.dart';
 import 'youtube_hub.dart';
 import 'youtube_widgets.dart';
+import '../../ui_kit/kit.dart';
 
 /// A channel: header with Subscribe, its videos and its posts.
 class YouTubeChannelScreen extends StatefulWidget {
@@ -186,7 +187,7 @@ class _YouTubeChannelScreenState extends State<YouTubeChannelScreen> {
                 const SizedBox(height: 14),
                 Align(
                   alignment: Alignment.centerLeft,
-                  child: SegmentedButton<bool>(
+                  child: KitSegmented<bool>(
                     showSelectedIcon: false,
                     segments: const [
                       ButtonSegment(value: false, icon: Icon(Icons.video_library_outlined), label: Text('Videos')),

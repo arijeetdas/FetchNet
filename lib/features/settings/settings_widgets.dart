@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../widgets/brand.dart';
+import '../../ui_kit/kit.dart';
 import '../../widgets/page_parts.dart' show ChipTone;
 
 export '../../widgets/page_parts.dart' show ChipTone;
@@ -183,7 +184,7 @@ class ToggleRow extends StatelessWidget {
                     ],
                   ),
                 ),
-                Switch(value: value, onChanged: onChanged),
+                KitSwitch(value: value, onChanged: onChanged),
               ],
             ),
           ),

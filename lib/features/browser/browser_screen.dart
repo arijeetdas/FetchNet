@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/cupertino.dart' show CupertinoIcons;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
@@ -22,6 +23,7 @@ import 'ad_blocker.dart';
 import 'browser_files.dart';
 import 'media_sniffer.dart';
 import 'page_hooks.dart';
+import '../../ui_kit/kit.dart';
 
 /// What Browser Mode hands back to Home.
 class BrowserGrab {
@@ -515,7 +517,7 @@ class _BrowserScreenState extends State<BrowserScreen> {
       'audio' => (Icons.music_note_rounded, 'audio', BrowserFileType.audio),
       _ => (Icons.link_rounded, 'link', null),
     };
-    showModalBottomSheet<void>(
+    showKitSheet<void>(
       context: context,
       showDragHandle: true,
       constraints: const BoxConstraints(maxWidth: 560),
@@ -739,7 +741,7 @@ class _BrowserScreenState extends State<BrowserScreen> {
   void _showMedia() {
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
-    showModalBottomSheet<void>(
+    showKitSheet<void>(
       context: context,
       showDragHandle: true,
       isScrollControlled: true,
@@ -866,9 +868,9 @@ class _BrowserScreenState extends State<BrowserScreen> {
         appBar: AppBar(
           backgroundColor: scheme.surfaceContainerLow,
           titleSpacing: 0,
-          leading: IconButton.filledTonal(
+          leading: KitBackButton(
+            close: true,
             tooltip: 'Close Browser Mode',
-            icon: const Icon(Icons.close_rounded),
             onPressed: () => Navigator.of(context).pop(),
           ),
           title: Padding(
@@ -901,24 +903,22 @@ class _BrowserScreenState extends State<BrowserScreen> {
             ),
           ),
           actions: [
-            IconButton.filledTonal(
+            KitHeaderButton(
               tooltip: 'Back',
               onPressed: _canGoBack ? () => _controller?.goBack() : null,
-              icon: const Icon(Icons.arrow_back_rounded),
+              icon: Icons.arrow_back_rounded,
+              glassIcon: CupertinoIcons.chevron_back,
             ),
-            IconButton.filledTonal(
+            KitHeaderButton(
               tooltip: 'Forward',
               onPressed: _canGoForward ? () => _controller?.goForward() : null,
-              icon: const Icon(Icons.arrow_forward_rounded),
+              icon: Icons.arrow_forward_rounded,
+              glassIcon: CupertinoIcons.chevron_forward,
             ),
-            PopupMenuButton<String>(
+            KitMenuButton<String>(
               tooltip: 'More',
-              icon: const Icon(Icons.more_vert_rounded),
-              style: IconButton.styleFrom(
-                backgroundColor: scheme.secondaryContainer,
-                foregroundColor: scheme.onSecondaryContainer,
-              ),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+              backgroundColor: scheme.secondaryContainer,
+              foregroundColor: scheme.onSecondaryContainer,
               onSelected: (v) {
                 switch (v) {
                   case 'reload':
@@ -931,32 +931,15 @@ class _BrowserScreenState extends State<BrowserScreen> {
                     _toggleAdBlock();
                 }
               },
-              itemBuilder: (context) => [
-                CheckedPopupMenuItem(
+              entries: [
+                KitMenuEntry(
                   value: 'adblock',
                   checked: _blockAds,
-                  child: Text(
-                    _blockAds && _blocked.value > 0 ? 'Block ads & trackers · ${_blocked.value} blocked' : 'Block ads & trackers',
-                  ),
+                  label: _blockAds && _blocked.value > 0 ? 'Block ads & trackers · ${_blocked.value} blocked' : 'Block ads & trackers',
                 ),
-                const PopupMenuItem(
-                  value: 'reload',
-                  child: ListTile(
-                    leading: Icon(Icons.refresh_rounded),
-                    title: Text('Reload'),
-                    contentPadding: EdgeInsets.zero,
-                  ),
-                ),
-                if (WebSession.isMobile)
-                  CheckedPopupMenuItem(value: 'desktop', checked: _desktop, child: const Text('Desktop view')),
-                const PopupMenuItem(
-                  value: 'pin',
-                  child: ListTile(
-                    leading: Icon(Icons.push_pin_outlined),
-                    title: Text('Pin this site'),
-                    contentPadding: EdgeInsets.zero,
-                  ),
-                ),
+                const KitMenuEntry(value: 'reload', label: 'Reload', icon: Icons.refresh_rounded),
+                if (WebSession.isMobile) KitMenuEntry(value: 'desktop', label: 'Desktop view', checked: _desktop),
+                const KitMenuEntry(value: 'pin', label: 'Pin this site', icon: Icons.push_pin_outlined),
               ],
             ),
             const SizedBox(width: 4),

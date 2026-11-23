@@ -16,6 +16,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart' as p;
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'stream_relay_test.dart' show Site, fetch;
+
 /// A yt-dlp run that ends when the test says so.
 class _Run extends EngineRun {
   _Run(this.args);
@@ -504,7 +506,10 @@ void main() {
         return engine.ffmpegRuns.last;
       }
 
-      Future<(DownloadTask, _Run)> start(CreatorJob job, {DownloadOption option = clipVideo}) async {
+      /// Starts [job]. The direct cut lists the streams first; unless
+      /// [direct], that listing fails here, so the part download (its
+      /// fallback) is the run returned.
+      Future<(DownloadTask, _Run)> start(CreatorJob job, {DownloadOption option = clipVideo, bool direct = false}) async {
         await manager.enqueue(
           info: MediaInfo(url: 'https://example.com/v', title: 'Video', raw: const {}),
           option: option,
@@ -513,6 +518,11 @@ void main() {
         );
         await _settle();
         final task = manager.tasks.single;
+        final listing = engine.last(task.id);
+        expect(listing.args, containsAllInOrder(['-j', '--', 'https://example.com/v']));
+        if (direct) return (task, listing);
+        listing.finish(1, stderr: 'ERROR: no streams in tests');
+        await pause();
         return (task, engine.last(task.id));
       }
 
@@ -529,7 +539,9 @@ void main() {
           shorts: true,
           background: ShortsBackground.blur,
         ));
-        expect(run.args, containsAllInOrder(['--download-sections', '*70-100', '--force-keyframes-at-cuts']));
+        expect(run.args, containsAllInOrder(['--download-sections', '*70-100']));
+        // yt-dlp re-encoding the part as it downloads is far too slow.
+        expect(run.args, isNot(contains('--force-keyframes-at-cuts')));
         final clip = File(p.join(root.path, 'Video.webm'))..writeAsStringSync('clip');
         run._lines.add('FNFILE|${clip.path}');
         await _settle();
@@ -670,6 +682,188 @@ void main() {
         grab.finish(0);
         await pause();
         expect(HistoryStore(prefs).entries.first.filePath, p.join(root.path, 'Video.jpg'));
+      });
+
+      group('cut straight from the streams', () {
+        late Site site;
+
+        setUp(() async => site = await Site.start(200000));
+        tearDown(() => site.close());
+
+        Map<String, dynamic> stream(String vcodec, String acodec, {String ext = 'mp4'}) => {
+          'url': '${site.url}',
+          'protocol': 'http',
+          'vcodec': vcodec,
+          'acodec': acodec,
+          'ext': ext,
+          'width': 1920,
+          'height': 1080,
+          'http_headers': {'User-Agent': 'FetchNet test'},
+        };
+
+        /// The stream FFmpeg is given: through the relay, which serves the
+        /// site's file.
+        Future<String> readsRelay(_Run ffmpeg, {int index = 0}) async {
+          final inputs = [for (var i = 0; i < ffmpeg.args.length; i++) if (ffmpeg.args[i] == '-i') ffmpeg.args[i + 1]];
+          final local = Uri.parse(inputs[index]);
+          expect(local.host, '127.0.0.1');
+          final (status, _, body) = await fetch(local, range: 'bytes=100-');
+          expect(status, HttpStatus.partialContent);
+          expect(body, site.data.sublist(100));
+          expect(site.agents.toSet(), {'FetchNet test'});
+          return inputs[index];
+        }
+
+        test('a snapshot: only the video is listed, and FFmpeg seeks in it', () async {
+          const option = DownloadOption(kind: MediaKind.thumbnail, label: 'Snapshot', extension: 'jpg', formatArgs: ['-f', 'bv*+ba/b']);
+          final (task, listing) = await start(const CreatorJob.snapshot(at: Duration(seconds: 42)), option: option, direct: true);
+          expect(listing.args, containsAllInOrder(['-f', 'bv*/b']));
+          expect(task.stage, 'Finding the moment…');
+          listing._lines.add(jsonEncode(stream('vp9', 'none', ext: 'webm')));
+          listing.finish(0);
+          final grab = await nextFfmpeg(1);
+          final input = await readsRelay(grab);
+          expect(grab.args, containsAllInOrder(['-ss', '42', '-i', input, '-frames:v', '1']));
+          expect(p.dirname(grab.args.last), root.path);
+          File(grab.args.last).writeAsStringSync('picture');
+          grab.finish(0);
+          await pause();
+          final entry = HistoryStore(prefs).entries.first;
+          expect(entry.filePath, p.join(root.path, 'Video.jpg'));
+          expect(File(entry.filePath!).readAsStringSync(), 'picture');
+          expect(engine.runs[task.id], hasLength(1)); // no part download
+          expect(root.listSync().whereType<File>().map((f) => p.basename(f.path)), ['Video.jpg']);
+        });
+
+        test('an exact clip: copied out of the streams, then encoded from that copy', () async {
+          final (task, listing) = await start(const CreatorJob.clip(start: Duration(seconds: 70), end: Duration(seconds: 100)), direct: true);
+          listing._lines.add(jsonEncode({
+            'title': 'Video',
+            'requested_formats': [stream('av01', 'none'), stream('none', 'opus', ext: 'webm')],
+          }));
+          listing.finish(0);
+          final copy = await nextFfmpeg(1);
+          await readsRelay(copy);
+          await readsRelay(copy, index: 1);
+          expect(copy.args, containsAllInOrder(['-c', 'copy']));
+          expect(p.isWithin(p.join(root.path, '.work'), copy.args.last), isTrue);
+          expect(task.stage, 'Downloading the clip…');
+          copy._lines.add('out_time_us=15000000');
+          await pause();
+          expect(task.progress, closeTo(0.15, 0.01)); // half the copy (first 30 %)
+          File(copy.args.last).writeAsStringSync('part');
+          copy.finish(0);
+
+          final encode = await nextFfmpeg(2);
+          expect(encode.args, containsAllInOrder(['-i', copy.args.last, '-t', '30']));
+          expect(encode.args, contains('libx264'));
+          expect(encode.args, isNot(contains('-filter_complex')));
+          expect(task.stage, 'Cutting it exactly…');
+          encode._lines.add('out_time_us=15000000');
+          await pause();
+          expect(task.progress, closeTo(0.65, 0.01));
+          File(encode.args.last).writeAsStringSync('clip');
+          encode.finish(0);
+          await pause();
+
+          final entry = HistoryStore(prefs).entries.first;
+          expect(entry.filePath, p.join(root.path, 'Video.mp4'));
+          expect(File(entry.filePath!).readAsStringSync(), 'clip');
+          expect(File(copy.args.last).existsSync(), isFalse); // the copy is cleaned up
+          expect(engine.ffmpegRuns, hasLength(2)); // no separate 9:16 pass
+        });
+
+        test('a 9:16 clip is made in the same encode; cuts not exact: one copy', () async {
+          final (_, listing) = await start(
+            const CreatorJob.clip(start: Duration(seconds: 70), end: Duration(seconds: 100), shorts: true, background: ShortsBackground.blur),
+            direct: true,
+          );
+          listing._lines.add(jsonEncode(stream('avc1', 'mp4a.40.2')));
+          listing.finish(0);
+          final copy = await nextFfmpeg(1);
+          expect(copy.args, containsAllInOrder(['-map', '0:v:0', '-map', '0:a:0?'])); // one stream with both
+          File(copy.args.last).writeAsStringSync('part');
+          copy.finish(0);
+          final encode = await nextFfmpeg(2);
+          expect(encode.args, contains('-filter_complex'));
+          File(encode.args.last).writeAsStringSync('short');
+          encode.finish(0);
+          await pause();
+          expect(File(p.join(root.path, 'Video.mp4')).readAsStringSync(), 'short');
+        });
+
+        test('cuts that needn\'t be exact are the copy itself', () async {
+          final (_, listing) = await start(
+            const CreatorJob.clip(start: Duration(seconds: 70), end: Duration(seconds: 100), exactCuts: false),
+            direct: true,
+          );
+          listing._lines.add(jsonEncode(stream('avc1', 'mp4a.40.2')));
+          listing.finish(0);
+          final copy = await nextFfmpeg(1);
+          expect(p.dirname(copy.args.last), root.path);
+          File(copy.args.last).writeAsStringSync('clip');
+          copy.finish(0);
+          await pause();
+          expect(engine.ffmpegRuns, hasLength(1));
+          expect(File(p.join(root.path, 'Video.mp4')).readAsStringSync(), 'clip');
+          expect(root.listSync().whereType<File>().map((f) => p.basename(f.path)), ['Video.mp4']);
+        });
+
+        test("a song's part is saved as its format asks", () async {
+          const mp3 = DownloadOption(kind: MediaKind.audio, label: 'MP3', extension: 'mp3', formatArgs: ['-f', 'ba/b', '-x', '--audio-format', 'mp3', '--audio-quality', '320K']);
+          final (_, listing) = await start(const CreatorJob.clip(start: Duration(seconds: 10), end: Duration(seconds: 40)), option: mp3, direct: true);
+          listing._lines.add(jsonEncode({...stream('none', 'opus', ext: 'webm'), 'title': 'Song', 'artist': 'Band'}));
+          listing.finish(0);
+          final cut = await nextFfmpeg(1);
+          await readsRelay(cut);
+          expect(cut.args, containsAllInOrder(['-c:a', 'libmp3lame', '-b:a', '320k']));
+          expect(cut.args, containsAllInOrder(['-metadata', 'title=Song', '-metadata', 'artist=Band']));
+          File(cut.args.last).writeAsStringSync('song');
+          cut.finish(0);
+          await pause();
+          expect(HistoryStore(prefs).entries.first.filePath, p.join(root.path, 'Video.mp3'));
+        });
+
+        test('when the direct cut fails, the part download takes over', () async {
+          final (task, listing) = await start(const CreatorJob.clip(start: Duration(seconds: 70), end: Duration(seconds: 100)), direct: true);
+          listing._lines.add(jsonEncode(stream('avc1', 'mp4a.40.2')));
+          listing.finish(0);
+          final copy = await nextFfmpeg(1);
+          copy.finish(1, stderr: 'Connection refused');
+          await pause();
+          final part = engine.last(task.id);
+          expect(identical(part, listing), isFalse);
+          expect(part.args, containsAllInOrder(['--download-sections', '*70-100']));
+          expect(root.listSync().whereType<File>(), isEmpty); // nothing left behind
+          part.finish(1, stderr: 'stop');
+          await pause();
+        });
+
+        test('a stream FFmpeg can\'t read here (DASH pieces) goes straight to the part download', () async {
+          final (task, listing) = await start(const CreatorJob.clip(start: Duration(seconds: 70), end: Duration(seconds: 100)), direct: true);
+          listing._lines.add(jsonEncode({...stream('avc1', 'mp4a'), 'protocol': 'http_dash_segments'}));
+          listing.finish(0);
+          await pause();
+          expect(engine.ffmpegRuns, isEmpty);
+          expect(engine.last(task.id).args, contains('--download-sections'));
+          engine.last(task.id).finish(1, stderr: 'stop');
+          await pause();
+        });
+
+        test('paused while cutting: resumes with the direct cut again', () async {
+          final (task, listing) = await start(const CreatorJob.clip(start: Duration(seconds: 70), end: Duration(seconds: 100)), direct: true);
+          listing._lines.add(jsonEncode(stream('avc1', 'mp4a.40.2')));
+          listing.finish(0);
+          await nextFfmpeg(1);
+          await manager.pause(task);
+          await pause();
+          expect(task.status, DownloadStatus.paused);
+          manager.resume(task);
+          await pause();
+          expect(engine.last(task.id).args, contains('-j'));
+          engine.last(task.id).finish(1, stderr: 'stop');
+          await pause();
+        });
       });
 
       test("an audio clip gets no lyrics (their times wouldn't match)", () async {

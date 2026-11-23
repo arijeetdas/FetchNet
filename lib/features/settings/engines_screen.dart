@@ -9,6 +9,7 @@ import '../../engine/engine.dart';
 import '../../widgets/app_dialog.dart';
 import '../../widgets/brand.dart';
 import '../shell/home_shell.dart';
+import '../../widgets/sub_page.dart';
 import 'settings_widgets.dart';
 
 const ytDlpRepo = 'https://github.com/yt-dlp/yt-dlp';
@@ -35,7 +36,7 @@ class EnginesScreen extends StatelessWidget {
     final macos = !kIsWeb && Platform.isMacOS;
 
     final body = ListView(
-      padding: EdgeInsets.fromLTRB(wide ? 28 : 16, 0, wide ? 28 : 16, 32 + MediaQuery.paddingOf(context).bottom),
+      padding: EdgeInsets.fromLTRB(wide ? 28 : 16, MediaQuery.paddingOf(context).top, wide ? 28 : 16, 32 + MediaQuery.paddingOf(context).bottom),
       children: [
         Center(
           child: ConstrainedBox(
@@ -142,11 +143,7 @@ class EnginesScreen extends StatelessWidget {
       ],
     );
 
-    return Scaffold(
-      appBar: AppBar(title: const Text('Engines'), backgroundColor: wide ? null : Colors.transparent),
-      extendBodyBehindAppBar: !wide,
-      body: wide ? body : AuroraBackground(intensity: 0.5, child: SafeArea(bottom: false, child: body)),
-    );
+    return SubPageScaffold(title: 'Engines', background: !wide, body: body);
   }
 }
 

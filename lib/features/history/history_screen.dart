@@ -18,6 +18,7 @@ import '../downloads/file_actions_sheet.dart';
 import '../settings/settings_widgets.dart';
 import '../shell/home_shell.dart';
 import 'clear_history_dialog.dart';
+import '../../ui_kit/kit.dart';
 
 /// Which downloads the History page lists.
 enum _Filter {
@@ -397,7 +398,7 @@ class _HistoryTile extends StatelessWidget {
 
 /// A download's details: its picture, what and when, why it failed, and
 /// what can be done with it.
-Future<void> showHistoryDetails(BuildContext context, HistoryEntry entry) => showModalBottomSheet<void>(
+Future<void> showHistoryDetails(BuildContext context, HistoryEntry entry) => showKitSheet<void>(
       context: context,
       showDragHandle: true,
       isScrollControlled: true,

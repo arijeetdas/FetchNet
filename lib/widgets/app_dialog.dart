@@ -3,6 +3,7 @@ import 'dart:ui';
 import 'package:flutter/material.dart';
 
 import 'toast.dart';
+import '../ui_kit/kit.dart';
 
 export 'toast.dart' show ToastKind;
 
@@ -52,7 +53,7 @@ Future<bool> confirmDialog(
     context: context,
     barrierDismissible: true,
     lockBack: false,
-    builder: (context) => AlertDialog(
+    builder: (context) => KitAlertDialog(
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(28)),
       title: Text(title),
       content: Text(message),

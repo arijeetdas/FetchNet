@@ -6,6 +6,7 @@ import '../../services/fetch_service.dart';
 import '../../services/youtube_streams.dart';
 import '../../widgets/brand.dart';
 import '../home/media_result_view.dart';
+import '../../ui_kit/kit.dart';
 
 /// Download options for a YouTube video in a popup, without leaving the
 /// YouTube view. Uses the same formats, settings (thumbnails, tags) and
@@ -62,7 +63,7 @@ Future<void> _showSheet(
 }) {
   final size = MediaQuery.sizeOf(context);
   final services = AppScope.of(context);
-  return showModalBottomSheet<void>(
+  return showKitSheet<void>(
     context: context,
     isScrollControlled: true,
     useSafeArea: true,

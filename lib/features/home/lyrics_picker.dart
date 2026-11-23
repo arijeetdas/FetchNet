@@ -8,6 +8,7 @@ import '../../core/format.dart';
 import '../../services/lrc.dart';
 import '../../services/lyrics_service.dart';
 import '../../widgets/app_dialog.dart';
+import '../../ui_kit/kit.dart';
 
 /// What the user chose for a song's lyrics on Home: these lyrics, or none.
 class LyricsChoice {
@@ -185,7 +186,7 @@ class _LyricsPickerState extends State<_LyricsPicker> {
     );
     final preview = _Preview(match: selected);
 
-    return Dialog(
+    return KitDialog(
       insetPadding: const EdgeInsets.all(16),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(28)),
       clipBehavior: Clip.antiAlias,

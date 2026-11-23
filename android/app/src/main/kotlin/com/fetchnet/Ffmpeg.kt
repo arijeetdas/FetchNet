@@ -7,8 +7,8 @@ import java.util.concurrent.ConcurrentHashMap
 /**
  * Runs the FFmpeg (or ffprobe) that ships with youtubedl-android, for the
  * work yt-dlp doesn't do itself: Shorts/Reels conversion and snapshots.
- * Its libraries live in the unpacked "ffmpeg" package, like Python's for
- * gallery-dl (see [GalleryDl]).
+ * Its libraries live in the unpacked "ffmpeg" package, and the C++ runtime
+ * it needs in the "python" one (see [GalleryDl]).
  */
 class Ffmpeg(private val context: Context) {
 
@@ -28,13 +28,16 @@ class Ffmpeg(private val context: Context) {
     fun run(id: String, args: List<String>, probe: Boolean, onLine: (String) -> Unit): Map<String, Any?> {
         val nativeDir = context.applicationInfo.nativeLibraryDir
         val exe = File(nativeDir, if (probe) "libffprobe.so" else "libffmpeg.so")
-        val libs = File(packages, "ffmpeg/usr/lib")
-        if (!exe.exists() || !libs.exists()) {
+        // FFmpeg's own libraries, and Python's: libc++_shared.so ships only
+        // in the Python package (youtubedl-android puts both on the path for
+        // yt-dlp the same way).
+        val libs = listOf(File(packages, "ffmpeg/usr/lib"), File(packages, "python/usr/lib"))
+        if (!exe.exists() || libs.any { !it.exists() }) {
             return mapOf("exitCode" to -1, "out" to "", "err" to "FFmpeg isn't ready yet. Wait for yt-dlp to finish starting.")
         }
         val builder = ProcessBuilder(listOf(exe.absolutePath) + args).directory(context.cacheDir)
         val env = builder.environment()
-        env["LD_LIBRARY_PATH"] = libs.absolutePath
+        env["LD_LIBRARY_PATH"] = libs.joinToString(":") { it.absolutePath }
         env["TMPDIR"] = context.cacheDir.absolutePath
         env["HOME"] = context.cacheDir.absolutePath
         val process = try {

@@ -8,6 +8,7 @@ import '../../widgets/app_dialog.dart';
 import '../../widgets/brand.dart';
 import '../../widgets/platform_logo.dart';
 import 'updater_dialog.dart';
+import '../../ui_kit/kit.dart';
 
 /// The one-time "What's new" popup, for the installed version only.
 ///
@@ -104,7 +105,7 @@ class _WhatsNewDialog extends StatelessWidget {
     final logoSize = compact ? 56.0 : 76.0;
     final platform = UpdateService.platformSlug;
 
-    return Dialog(
+    return KitDialog(
       backgroundColor: scheme.surface,
       surfaceTintColor: Colors.transparent,
       insetPadding: inset,

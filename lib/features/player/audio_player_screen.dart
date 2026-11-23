@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:flutter/cupertino.dart' show CupertinoIcons;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:crypto/crypto.dart';
@@ -23,6 +24,7 @@ import '../../widgets/app_dialog.dart';
 import '../../widgets/brand.dart';
 import 'art_palette.dart';
 import 'player_visuals.dart';
+import '../../ui_kit/kit.dart';
 
 /// Plays a downloaded song or other audio in FetchNet's own player.
 Future<void> openAudioPlayer(BuildContext context, {required String path, String? title, String? artUrl}) {
@@ -407,10 +409,12 @@ class _AudioPlayerScreenState extends State<AudioPlayerScreen> {
       padding: const EdgeInsets.fromLTRB(8, 4, 8, 0),
       child: Row(
         children: [
-          IconButton(
+          KitBackButton(
             tooltip: 'Close',
-            onPressed: () => Navigator.of(context).maybePop(),
-            icon: Icon(Icons.keyboard_arrow_down_rounded, color: colors.fg, size: 30),
+            icon: Icons.keyboard_arrow_down_rounded,
+            glassIcon: CupertinoIcons.chevron_down,
+            color: colors.fg,
+            fill: colors.fg.withValues(alpha: 0.12),
           ),
           Expanded(
             child: Column(
@@ -627,7 +631,7 @@ class _AudioPlayerScreenState extends State<AudioPlayerScreen> {
 
   void _openMenu(_Colors colors, {bool sleep = false}) {
     final panel = colors.art ? Color.lerp(_palette!.bottom, Colors.black, 0.15)! : Theme.of(context).colorScheme.surfaceContainer;
-    showModalBottomSheet<void>(
+    showKitSheet<void>(
       context: context,
       backgroundColor: Colors.transparent,
       isScrollControlled: true,
@@ -751,7 +755,7 @@ class _AudioPlayerScreenState extends State<AudioPlayerScreen> {
       ('Lyrics', _lyrics.isSynced ? 'Synced' : (_lyrics.isEmpty ? 'None' : 'Plain text')),
       ('File', widget.path),
     ];
-    showModalBottomSheet<void>(
+    showKitSheet<void>(
       context: context,
       backgroundColor: Colors.transparent,
       constraints: const BoxConstraints(maxWidth: 560),

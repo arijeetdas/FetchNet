@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../widgets/app_dialog.dart';
 import '../../widgets/brand.dart';
 import '../onboarding/disclaimer_content.dart';
+import '../../ui_kit/kit.dart';
 
 /// Settings → About FetchNet: what the app does, how a download goes, and
 /// the open-source tools behind it.
@@ -44,7 +45,7 @@ class _InfoDialog extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
-    return Dialog(
+    return KitDialog(
       backgroundColor: scheme.surface,
       surfaceTintColor: Colors.transparent,
       insetPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),

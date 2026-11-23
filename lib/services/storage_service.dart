@@ -211,15 +211,29 @@ class StorageService extends ChangeNotifier {
     }
   }
 
-  /// Saves downloads in [path] from now on (files already saved stay where
-  /// they are). Only the subfolders that are missing (`Images`, `Audio`,
-  /// `Video`) are made; existing ones are kept as they are.
+  /// The FetchNet folder downloads go to when [picked] is chosen: a
+  /// `FetchNet` folder inside it, or [picked] itself when it already is one
+  /// (no `FetchNet/FetchNet`).
+  static String fetchNetFolderIn(String picked) {
+    final folder = p.normalize(picked);
+    return p.basename(folder).toLowerCase() == 'fetchnet' ? folder : p.join(folder, 'FetchNet');
+  }
+
+  /// Saves downloads in the FetchNet folder inside [path] from now on (see
+  /// [fetchNetFolderIn]; files already saved stay where they are). Only the
+  /// folders that are missing (`FetchNet`, `Images`, `Audio`, `Video`) are
+  /// made; existing ones are kept as they are.
   Future<FolderChange> chooseFolder(String path) async {
     final store = _store;
     if (store == null) return const FolderChange(error: 'Settings aren\'t available.');
-    final target = p.normalize(path);
+    final target = fetchNetFolderIn(path);
     if (!await _permitted(true)) return FolderChange(error: _error);
-    final missing = [for (final f in MediaFolder.values) if (!Directory(p.join(target, f.folderName)).existsSync()) f.folderName];
+    final newRoot = !Directory(target).existsSync();
+    final missing = [
+      if (newRoot) p.basename(target),
+      for (final f in MediaFolder.values)
+        if (!Directory(p.join(target, f.folderName)).existsSync()) f.folderName,
+    ];
     final problem = await _usable(target);
     if (problem == null) {
       await store.setString(_kCustomDir, target);
@@ -229,10 +243,13 @@ class StorageService extends ChangeNotifier {
       notifyListeners();
       return FolderChange(created: missing);
     }
-    // Leave nothing behind in a folder that can't be used.
-    for (final name in missing) {
+    // Leave nothing behind in a folder that can't be used: the subfolders
+    // made, then the FetchNet folder when it was made too.
+    for (final d in [
+      for (final name in missing.skip(newRoot ? 1 : 0)) Directory(p.join(target, name)),
+      if (newRoot) Directory(target),
+    ]) {
       try {
-        final d = Directory(p.join(target, name));
         if (d.existsSync() && d.listSync().isEmpty) d.deleteSync();
       } catch (_) {}
     }

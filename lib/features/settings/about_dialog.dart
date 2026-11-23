@@ -9,6 +9,7 @@ import '../../widgets/platform_logo.dart';
 import '../../core/app_services.dart';
 import '../shell/updater_dialog.dart';
 import '../shell/whats_new_dialog.dart';
+import '../../ui_kit/kit.dart';
 
 /// Recommended Android build for this device: the same rule as the update
 /// link (the preferred ABI when FetchNet publishes a build for it,
@@ -64,7 +65,7 @@ class _AboutDialog extends StatelessWidget {
     const headerHeight = 124.0;
     const logoSize = 84.0;
 
-    return Dialog(
+    return KitDialog(
       backgroundColor: scheme.surface,
       surfaceTintColor: Colors.transparent,
       insetPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),

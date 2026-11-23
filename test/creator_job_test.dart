@@ -27,9 +27,9 @@ void main() {
   });
 
   group('Jobs', () {
-    test('a clip downloads only its part, exactly when asked', () {
+    test("a clip's part download (the direct cut's fallback) never re-encodes in yt-dlp", () {
       const clip = CreatorJob.clip(start: Duration(seconds: 70), end: Duration(seconds: 100));
-      expect(clip.ytDlpArgs(), ['--download-sections', '*70-100', '--force-keyframes-at-cuts']);
+      expect(clip.ytDlpArgs(), ['--download-sections', '*70-100']);
       const quick = CreatorJob.clip(start: Duration(seconds: 70), end: Duration(seconds: 100), exactCuts: false);
       expect(quick.ytDlpArgs(), ['--download-sections', '*70-100']);
       expect(clip.length, const Duration(seconds: 30));
@@ -101,6 +101,75 @@ void main() {
     test('a snapshot is the first frame (JPG at high quality)', () {
       expect(snapshotArgs(input: 'in', output: 'a.jpg', format: SnapshotFormat.jpg), containsAllInOrder(['-frames:v', '1', '-q:v', '2', 'a.jpg']));
       expect(snapshotArgs(input: 'in', output: 'a.png', format: SnapshotFormat.png), isNot(contains('-q:v')));
+    });
+  });
+
+  group('Direct cuts', () {
+    const clip = CreatorJob.clip(start: Duration(seconds: 70), end: Duration(seconds: 100));
+    const v = FfInput('http://127.0.0.1:1/t/0', ['-rw_timeout', '30000000']);
+    const a = FfInput('http://127.0.0.1:1/t/1');
+
+    test('the part is copied out of each stream, read only around it', () {
+      final args = streamCopyArgs(video: v, audio: a, job: clip, output: 'part.mp4');
+      expect(args, containsAllInOrder(['-rw_timeout', '30000000', '-ss', '70', '-t', '32', '-i', v.url, '-ss', '70', '-t', '32', '-i', a.url]));
+      expect(args, containsAllInOrder(['-t', '30', '-map', '0:v:0', '-map', '1:a:0?', '-c', 'copy']));
+      // Kept timestamps: the MP4 edit list starts players at the start.
+      expect(args, isNot(contains('-avoid_negative_ts')));
+      expect(args.last, 'part.mp4');
+      // A video with its own sound.
+      expect(streamCopyArgs(video: v, audio: null, job: clip, output: 'p.mp4'), containsAllInOrder(['-map', '0:v:0', '-map', '0:a:0?']));
+    });
+
+    test('exact cuts and 9:16 are encoded from the local copy', () {
+      final exact = clipEncodeArgs(input: 'part.mp4', job: clip, output: 'out.mp4', preset: 'superfast');
+      expect(exact, containsAllInOrder(['-i', 'part.mp4', '-t', '30', '-map', '0:v:0', '-c:v', 'libx264', '-preset', 'superfast']));
+      expect(exact, isNot(contains('-ss')));
+      const shorts = CreatorJob.clip(start: Duration(seconds: 70), end: Duration(seconds: 100), shorts: true);
+      final made = clipEncodeArgs(input: 'part.mp4', job: shorts, output: 'out.mp4', shape: const VideoShape(1920, 1080));
+      expect(made, containsAllInOrder(['-filter_complex', shortsGraph(const VideoShape(1920, 1080), ShortsBackground.black), '-map', '[v]']));
+      // Already portrait: no 9:16 graph.
+      expect(clipEncodeArgs(input: 'p', job: shorts, output: 'o.mp4', shape: const VideoShape(1080, 1920)), isNot(contains('-filter_complex')));
+    });
+
+    test("a song's part, saved as its format asks, with its tags", () {
+      final args = streamAudioClipArgs(
+        audio: a,
+        job: clip,
+        output: 'song.mp3',
+        audioCodec: const ['-c:a', 'libmp3lame', '-b:a', '320k'],
+        metadata: const {'title': 'Song', 'artist': 'Band', 'album': ' '},
+      );
+      expect(args, containsAllInOrder(['-ss', '70', '-t', '32', '-i', a.url, '-t', '30', '-map', '0:a:0', '-vn', '-c:a', 'libmp3lame']));
+      expect(args, containsAllInOrder(['-metadata', 'title=Song', '-metadata', 'artist=Band']));
+      expect(args.where((x) => x.startsWith('album=')), isEmpty);
+      expect(args, containsAllInOrder(['-id3v2_version', '3']));
+    });
+
+    test('audio targets: converted, or copied when already right', () {
+      void same((String, List<String>) got, String ext, List<String> args) {
+        expect(got.$1, ext);
+        expect(got.$2, args);
+      }
+
+      const mp3 = AudioTarget(format: 'mp3', quality: '320K');
+      same(mp3.encode(codec: 'opus', sourceExt: 'webm'), 'mp3', ['-c:a', 'libmp3lame', '-b:a', '320k']);
+      same(const AudioTarget(format: 'mp3', quality: '2').encode(codec: 'opus', sourceExt: 'webm'), 'mp3', ['-c:a', 'libmp3lame', '-q:a', '2']);
+      same(const AudioTarget(format: 'm4a').encode(codec: 'mp4a.40.2', sourceExt: 'm4a'), 'm4a', ['-c:a', 'copy']);
+      expect(const AudioTarget(format: 'm4a').encode(codec: 'opus', sourceExt: 'webm').$2, contains('aac'));
+      same(const AudioTarget().encode(codec: 'opus', sourceExt: 'webm'), 'opus', ['-c:a', 'copy']);
+      same(const AudioTarget(format: 'best').encode(codec: 'mp4a.40.5', sourceExt: 'm4a'), 'm4a', ['-c:a', 'copy']);
+      expect(AudioTarget.fromArgs(const ['-f', 'ba/b', '-x', '--audio-format', 'mp3', '--audio-quality', '192K']).quality, '192K');
+      expect(AudioTarget.fromArgs(const ['-f', 'ba']).format, isNull);
+    });
+
+    test('a snapshot downloads only video', () {
+      expect(videoOnlyFormatArgs(const ['-f', '137+140/bv*+ba/b', '--merge-output-format', 'mp4']), ['-f', '137/bv*/b', '--merge-output-format', 'mp4']);
+      expect(videoOnlyFormatArgs(const ['-x']), ['-x']);
+    });
+
+    test('a snapshot seeks in the stream itself', () {
+      final args = snapshotArgs(input: v.url, inputOptions: v.options, output: 'a.jpg', format: SnapshotFormat.jpg, seek: const Duration(seconds: 42));
+      expect(args, containsAllInOrder(['-rw_timeout', '30000000', '-ss', '42', '-i', v.url, '-frames:v', '1']));
     });
   });
 }

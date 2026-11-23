@@ -19,38 +19,49 @@ void main() {
   tearDown(() => tmp.deleteSync(recursive: true));
 
   group('chooseFolder', () {
-    test('makes all three subfolders in a new folder', () async {
+    test('makes a FetchNet folder in the chosen one, with its three subfolders', () async {
       final storage = StorageService(prefs);
-      final target = p.join(tmp.path, 'Clips');
-      final change = await storage.chooseFolder(target);
+      final picked = p.join(tmp.path, 'Clips');
+      final fetchNet = p.join(picked, 'FetchNet');
+      final change = await storage.chooseFolder(picked);
       expect(change.ok, isTrue);
-      expect(change.created, ['Images', 'Audio', 'Video']);
+      expect(change.created, ['FetchNet', 'Images', 'Audio', 'Video']);
       for (final f in ['Images', 'Audio', 'Video']) {
-        expect(Directory(p.join(target, f)).existsSync(), isTrue);
+        expect(Directory(p.join(fetchNet, f)).existsSync(), isTrue);
+        expect(Directory(p.join(picked, f)).existsSync(), isFalse, reason: 'never straight in the chosen folder');
       }
-      expect(storage.downloadDir, p.normalize(target));
+      expect(storage.downloadDir, fetchNet);
       expect(storage.isCustom, isTrue);
-      expect(prefs.getString('downloads.custom_dir'), p.normalize(target));
+      expect(prefs.getString('downloads.custom_dir'), fetchNet);
     });
 
-    test('makes only the missing subfolders and keeps what is there', () async {
-      final target = Directory(p.join(tmp.path, 'Media'))..createSync();
-      final audio = Directory(p.join(target.path, 'Audio'))..createSync();
+    test('a folder that already is a FetchNet folder is used as it is', () async {
+      final picked = p.join(tmp.path, 'Media', 'FetchNet');
+      final storage = StorageService(prefs);
+      await storage.chooseFolder(picked);
+      expect(storage.downloadDir, p.normalize(picked));
+      expect(Directory(p.join(picked, 'FetchNet')).existsSync(), isFalse);
+      expect(StorageService.fetchNetFolderIn('${p.join(tmp.path, 'x', 'fetchnet')}${p.separator}'), p.join(tmp.path, 'x', 'fetchnet'));
+    });
+
+    test('makes only the missing folders and keeps what is there', () async {
+      final picked = Directory(p.join(tmp.path, 'Media'))..createSync();
+      final audio = Directory(p.join(picked.path, 'FetchNet', 'Audio'))..createSync(recursive: true);
       final song = File(p.join(audio.path, 'song.mp3'))..writeAsStringSync('tune');
       final storage = StorageService(prefs);
-      final change = await storage.chooseFolder(target.path);
+      final change = await storage.chooseFolder(picked.path);
       expect(change.ok, isTrue);
       expect(change.created, ['Images', 'Video']);
       expect(song.readAsStringSync(), 'tune');
       expect(audio.listSync().map((e) => p.basename(e.path)), ['song.mp3'], reason: 'no test files left behind');
     });
 
-    test('nothing is made when every subfolder is there', () async {
-      final target = p.join(tmp.path, 'Full');
+    test('nothing is made when every folder is there', () async {
+      final picked = p.join(tmp.path, 'Full');
       for (final f in ['Images', 'Audio', 'Video']) {
-        Directory(p.join(target, f)).createSync(recursive: true);
+        Directory(p.join(picked, 'FetchNet', f)).createSync(recursive: true);
       }
-      final change = await StorageService(prefs).chooseFolder(target);
+      final change = await StorageService(prefs).chooseFolder(picked);
       expect(change.ok, isTrue);
       expect(change.created, isEmpty);
     });
@@ -71,13 +82,14 @@ void main() {
     });
 
     test('the chosen folder is used again on the next start', () async {
-      final target = p.join(tmp.path, 'Saved');
-      await StorageService(prefs).chooseFolder(target);
-      Directory(p.join(target, 'Video')).deleteSync();
+      final picked = p.join(tmp.path, 'Saved');
+      final fetchNet = p.join(picked, 'FetchNet');
+      await StorageService(prefs).chooseFolder(picked);
+      Directory(p.join(fetchNet, 'Video')).deleteSync();
       final next = StorageService(prefs);
-      expect(await next.ensureDownloadDir(), p.normalize(target));
+      expect(await next.ensureDownloadDir(), fetchNet);
       expect(next.customProblem, isNull);
-      expect(Directory(p.join(target, 'Video')).existsSync(), isTrue, reason: 'a removed subfolder is made again');
+      expect(Directory(p.join(fetchNet, 'Video')).existsSync(), isTrue, reason: 'a removed subfolder is made again');
     });
   });
 
@@ -96,11 +108,10 @@ void main() {
   test('shortName shows the end of the folder', () async {
     final storage = StorageService(prefs);
     expect(storage.shortName(), 'Download/FetchNet');
-    final target = p.join(tmp.path, 'Media', 'Clips');
-    await storage.chooseFolder(target);
-    expect(storage.shortName(), 'Media/Clips');
-    expect(storage.shortName(MediaKind.audio), 'Media/Clips/Audio');
-    expect(storage.shortName(MediaKind.thumbnail), 'Media/Clips/Images');
+    await storage.chooseFolder(p.join(tmp.path, 'Media', 'Clips'));
+    expect(storage.shortName(), 'Clips/FetchNet');
+    expect(storage.shortName(MediaKind.audio), 'Clips/FetchNet/Audio');
+    expect(storage.shortName(MediaKind.thumbnail), 'Clips/FetchNet/Images');
   });
 
   group('folderPathOf', () {

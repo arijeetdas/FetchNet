@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../ui_kit/glass_tuning.dart';
+
 /// Typed access to everything FetchNet keeps in SharedPreferences.
 class AppPrefs {
   AppPrefs._(this._prefs);
@@ -24,6 +26,10 @@ class AppPrefs {
   static const _kThemeMode = 'settings.theme_mode';
   static const _kAutoUpdateEngine = 'settings.auto_update_engine';
   static const _kShowAnimations = 'settings.show_animations';
+  static const _kLiquidGlass = 'settings.liquid_glass';
+  static const _kGlassOpacity = 'settings.glass_opacity';
+  static const _kGlassReflection = 'settings.glass_reflection';
+  static const _kGlassRefraction = 'settings.glass_refraction';
   static const _kLastEngineUpdateCheck = 'engine.last_update_check';
   static const _kHistory = 'downloads.history';
   static const _kYtThumbnails = 'youtube.thumbnail_downloads';
@@ -109,6 +115,23 @@ class AppPrefs {
 
   bool get showAnimations => _prefs.getBool(_kShowAnimations) ?? true;
   Future<void> setShowAnimations(bool value) => _prefs.setBool(_kShowAnimations, value);
+
+  /// Settings → Liquid Glass: Apple's glass for the navigation, dialogs,
+  /// sheets, menus and controls (off: FetchNet's own look).
+  bool get liquidGlass => _prefs.getBool(_kLiquidGlass) ?? false;
+  Future<void> setLiquidGlass(bool value) => _prefs.setBool(_kLiquidGlass, value);
+
+  /// Liquid Glass's opacity, reflection and refraction (see [GlassTuning]).
+  GlassTuning get glassTuning => GlassTuning(
+        opacity: (_prefs.getDouble(_kGlassOpacity) ?? 0.5).clamp(0.0, 1.0),
+        reflection: (_prefs.getDouble(_kGlassReflection) ?? 0).clamp(0.0, 1.0),
+        refraction: (_prefs.getDouble(_kGlassRefraction) ?? 0).clamp(0.0, 1.0),
+      );
+  Future<void> setGlassTuning(GlassTuning t) async {
+    await _prefs.setDouble(_kGlassOpacity, t.opacity);
+    await _prefs.setDouble(_kGlassReflection, t.reflection);
+    await _prefs.setDouble(_kGlassRefraction, t.refraction);
+  }
 
   bool get autoUpdateEngine => _prefs.getBool(_kAutoUpdateEngine) ?? true;
   Future<void> setAutoUpdateEngine(bool value) => _prefs.setBool(_kAutoUpdateEngine, value);

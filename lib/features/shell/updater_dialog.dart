@@ -9,6 +9,7 @@ import '../../widgets/app_dialog.dart';
 import '../../widgets/brand.dart';
 import 'update_banner.dart';
 import 'whats_new_dialog.dart';
+import '../../ui_kit/kit.dart';
 
 /// The updater: what's new in the latest version, then download and install
 /// it in the app. "Open the update page" (the website, as before) is always
@@ -113,7 +114,7 @@ class _UpdaterDialog extends StatelessWidget {
             child: _Actions(updater: updater, inApp: AppUpdater.supported && updates.update != null),
           ),
         );
-        return Dialog(
+        return KitDialog(
           backgroundColor: scheme.surface,
           surfaceTintColor: Colors.transparent,
           insetPadding: inset,

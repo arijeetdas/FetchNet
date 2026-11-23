@@ -16,6 +16,7 @@ import 'player/yt_player_controller.dart';
 import 'player/yt_player_view.dart';
 import 'youtube_hub.dart';
 import 'youtube_widgets.dart';
+import '../../ui_kit/kit.dart';
 
 bool get _isAndroid => !kIsWeb && Platform.isAndroid;
 bool get _isDesktop => !kIsWeb && (Platform.isWindows || Platform.isMacOS || Platform.isLinux);
@@ -659,7 +660,7 @@ class _UpNext {
             const Spacer(),
             Text('Autoplay', style: theme.textTheme.labelLarge?.copyWith(color: scheme.onSurfaceVariant)),
             const SizedBox(width: 6),
-            Switch(value: c.autoplay, onChanged: c.setAutoplay),
+            KitSwitch(value: c.autoplay, onChanged: c.setAutoplay),
           ],
         ),
       ),

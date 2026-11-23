@@ -23,6 +23,8 @@ import '../services/youtube_streams.dart';
 import 'app_prefs.dart';
 import 'platform/device_environment.dart';
 import 'platform/native_bridge.dart';
+import '../ui_kit/glass_kit.dart';
+import '../ui_kit/glass_tuning.dart';
 
 /// Everything the UI needs, created once in `main`.
 class AppServices {
@@ -41,7 +43,9 @@ class AppServices {
     required this.creator,
     required this.cookieArgs,
   })  : themeMode = ValueNotifier(prefs.themeMode),
-        showAnimations = ValueNotifier(prefs.showAnimations);
+        showAnimations = ValueNotifier(prefs.showAnimations),
+        liquidGlass = ValueNotifier(prefs.liquidGlass),
+        glassTuning = ValueNotifier(prefs.glassTuning);
 
   /// [youtubeClient] lets tests feed YouTube data without the network.
   factory AppServices.create(AppPrefs prefs, {YouTubeClient? youtubeClient}) {
@@ -135,6 +139,12 @@ class AppServices {
   /// Settings → Show animations: the animated page icons play, or stay still.
   final ValueNotifier<bool> showAnimations;
 
+  /// Settings → Liquid Glass (see [UiLook]).
+  final ValueNotifier<bool> liquidGlass;
+
+  /// Settings → Liquid Glass's opacity, reflection and refraction.
+  final ValueNotifier<GlassTuning> glassTuning;
+
   /// Links shared into the app (Android share sheet). The home screen
   /// consumes them.
   final ValueNotifier<String?> incomingLink = ValueNotifier(null);
@@ -199,6 +209,20 @@ class AppServices {
   Future<void> setShowAnimations(bool value) async {
     showAnimations.value = value;
     await prefs.setShowAnimations(value);
+  }
+
+  /// Turns Liquid Glass on or off; its shaders are made ready first, so the
+  /// first glass frame doesn't flash.
+  Future<void> setLiquidGlass(bool value) async {
+    if (value) await GlassKit.prepare();
+    liquidGlass.value = value;
+    await prefs.setLiquidGlass(value);
+  }
+
+  /// Changes how the glass looks; [save] once a slider is let go.
+  Future<void> setGlassTuning(GlassTuning tuning, {bool save = true}) async {
+    glassTuning.value = tuning;
+    if (save) await prefs.setGlassTuning(tuning);
   }
 
   Future<void> setThemeMode(ThemeMode mode) async {

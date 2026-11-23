@@ -16,6 +16,7 @@ import '../../core/platform/native_bridge.dart';
 import '../../core/platform/pip.dart';
 import '../../widgets/app_dialog.dart';
 import '../../widgets/brand.dart';
+import '../../ui_kit/kit.dart';
 
 /// Plays a downloaded video in FetchNet's own player.
 Future<void> openVideoPlayer(BuildContext context, {required String path, String? title}) {
@@ -467,7 +468,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
 
   void _openMenu([_MenuPage page = _MenuPage.main]) {
     _hideTimer?.cancel();
-    showModalBottomSheet<void>(
+    showKitSheet<void>(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
@@ -1536,7 +1537,7 @@ class _PlayerMenuState extends State<_PlayerMenu> {
           ),
         const SizedBox(height: 10),
         _label('Size'),
-        SegmentedButton<double>(
+        KitSegmented<double>(
           segments: const [
             ButtonSegment(value: 0.8, label: Text('S')),
             ButtonSegment(value: 1.0, label: Text('M')),

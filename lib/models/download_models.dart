@@ -41,10 +41,12 @@ class DownloadTask {
   /// Lyrics to save as a `.lrc` next to the finished file.
   String? lyricsFile;
 
-  // A creator's part: yt-dlp hands the download of just that part to FFmpeg,
-  // which reports its own progress ([sectionPart]: video, then audio). When
-  // that fails or stalls, the whole video is downloaded and cut on the
-  // device instead ([cutLocally]).
+  // A creator's part: FFmpeg first cuts it straight from the streams
+  // ([directTried] once it has had its go). Next, yt-dlp hands the download
+  // of just that part to FFmpeg, which reports its own progress
+  // ([sectionPart]: video, then audio). When that fails or stalls too, the
+  // whole video is downloaded and cut on the device ([cutLocally]).
+  bool directTried = false;
   bool cutLocally = false;
   bool sectionStalled = false;
   int sectionPart = 0;

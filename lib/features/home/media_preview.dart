@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 
 import '../../widgets/brand.dart';
 import '../downloads/file_actions_sheet.dart';
+import '../../ui_kit/kit.dart';
 import 'home_kit.dart';
 
 /// One picture of a [showMediaPreview] viewer.
@@ -326,11 +327,12 @@ class _BarButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return IconButton.filledTonal(
+    return KitFloatingButton(
       tooltip: tooltip,
-      style: IconButton.styleFrom(backgroundColor: Colors.white.withValues(alpha: 0.14)),
+      backgroundColor: Colors.white.withValues(alpha: 0.14),
+      color: Colors.white,
       onPressed: onPressed,
-      icon: Icon(icon, color: Colors.white),
+      icon: icon,
     );
   }
 }
@@ -434,11 +436,12 @@ class _NavButton extends StatelessWidget {
     return AnimatedOpacity(
       opacity: onTap == null ? 0.25 : 1,
       duration: const Duration(milliseconds: 160),
-      child: IconButton.filledTonal(
+      child: KitFloatingButton(
         iconSize: 30,
-        style: IconButton.styleFrom(backgroundColor: Colors.white.withValues(alpha: 0.14)),
+        backgroundColor: Colors.white.withValues(alpha: 0.14),
+        color: Colors.white,
         onPressed: onTap,
-        icon: Icon(icon, color: Colors.white),
+        icon: icon,
       ),
     );
   }

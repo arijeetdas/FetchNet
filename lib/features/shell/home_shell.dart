@@ -1,9 +1,13 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:flutter/cupertino.dart' show CupertinoIcons;
 import 'package:flutter/material.dart';
+import 'package:liquid_glass_widgets/liquid_glass_widgets.dart' show LiquidGlassScope, GlassBackgroundSource;
 import 'package:flutter/services.dart';
 
+import '../../ui_kit/ui_look.dart';
+import '../../ui_kit/glass_kit.dart';
 import '../../core/app_services.dart';
 import '../../services/quit_app.dart';
 import '../../services/update_service.dart';
@@ -51,6 +55,17 @@ class _HomeShellState extends State<HomeShell> {
     (Icons.history_outlined, Icons.history_rounded, 'History'),
     (Icons.settings_outlined, Icons.settings_rounded, 'Settings'),
   ];
+
+  /// With Liquid Glass: iOS-style icons (outline, and filled when selected).
+  static const _glassIcons = [
+    (CupertinoIcons.house, CupertinoIcons.house_fill),
+    (CupertinoIcons.arrow_down_circle, CupertinoIcons.arrow_down_circle_fill),
+    (CupertinoIcons.clock, CupertinoIcons.clock_fill),
+    (CupertinoIcons.gear_alt, CupertinoIcons.gear_alt_fill),
+  ];
+
+  /// The pages, kept when the layout changes (see [build]).
+  final _pagesKey = GlobalKey(debugLabel: 'pages');
 
   /// Update-check result already reported to the user.
   UpdateState? _reported;
@@ -161,6 +176,8 @@ class _HomeShellState extends State<HomeShell> {
             icon: _destinations[i].$1,
             selectedIcon: _destinations[i].$2,
             label: _destinations[i].$3,
+            glassIcon: _glassIcons[i].$1,
+            glassSelectedIcon: _glassIcons[i].$2,
             badge: i == 1 ? _services.downloads.activeCount : 0,
             dot: i == 3 && _services.updates.updateAvailable,
           ),
@@ -173,22 +190,71 @@ class _HomeShellState extends State<HomeShell> {
     final extended = width >= Breakpoints.wide;
     final badges = Listenable.merge([_services.downloads, _services.updates]);
 
-    final body = FadeIndexedStack(
-      index: _index,
-      children: const [HomeScreen(), DownloadsScreen(), HistoryScreen(), SettingsScreen()],
+    // The pages keep their state whichever way they're laid out (Liquid
+    // Glass switched on or off).
+    final body = KeyedSubtree(
+      key: _pagesKey,
+      child: FadeIndexedStack(index: _index, children: const [HomeScreen(), DownloadsScreen(), HistoryScreen(), SettingsScreen()]),
     );
 
+    // The pages are what the glass bar and sidebar refract where the glass
+    // has to be handed a picture of what's behind it (Windows, Linux).
     if (!useRail) {
-      return Scaffold(
-        extendBody: true,
-        body: body,
-        bottomNavigationBar: ListenableBuilder(
-          listenable: badges,
-          builder: (context, _) => FloatingNavBar(
-            target: _navTarget,
-            onTargetChanged: _target,
-            onSettled: _show,
-            items: _navItems,
+      return LiquidGlassScope(
+        child: Scaffold(
+          extendBody: true,
+          body: GlassBackgroundSource(child: body),
+          bottomNavigationBar: ListenableBuilder(
+            listenable: badges,
+            builder: (context, _) => FloatingNavBar(target: _navTarget, onTargetChanged: _target, onSettled: _show, items: _navItems),
+          ),
+        ),
+      );
+    }
+
+    final rail = ListenableBuilder(
+      listenable: badges,
+      builder: (context, _) => AppNavRail(
+        extended: extended,
+        selectedIndex: _index,
+        onSelected: _show,
+        items: _navItems,
+        leading: Padding(
+          padding: const EdgeInsets.fromLTRB(8, 16, 8, 24),
+          child: extended
+              ? Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const FetchNetLogo(size: 40),
+                    const SizedBox(width: 12),
+                    GradientText('FetchNet', style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w900)),
+                  ],
+                )
+              : const FetchNetLogo(size: 44),
+        ),
+      ),
+    );
+
+    if (context.liquidGlass) {
+      // The glass sidebar floats beside the pages (and their aurora), which
+      // it refracts; it isn't part of the picture it refracts.
+      return LiquidGlassScope(
+        child: Scaffold(
+          body: Stack(
+            children: [
+              Positioned.fill(
+                child: GlassBackgroundSource(
+                  child: AuroraBackground(
+                    intensity: 0.5,
+                    child: Padding(
+                      padding: EdgeInsets.only(left: GlassKit.railWidth(extended: extended)),
+                      child: body,
+                    ),
+                  ),
+                ),
+              ),
+              Positioned(left: 0, top: 0, bottom: 0, child: rail),
+            ],
           ),
         ),
       );
@@ -199,31 +265,7 @@ class _HomeShellState extends State<HomeShell> {
         intensity: 0.5,
         child: Row(
           children: [
-            ListenableBuilder(
-              listenable: badges,
-              builder: (context, _) => AppNavRail(
-                extended: extended,
-                selectedIndex: _index,
-                onSelected: _show,
-                items: _navItems,
-                leading: Padding(
-                  padding: const EdgeInsets.fromLTRB(8, 16, 8, 24),
-                  child: extended
-                      ? Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            const FetchNetLogo(size: 40),
-                            const SizedBox(width: 12),
-                            GradientText(
-                              'FetchNet',
-                              style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w900),
-                            ),
-                          ],
-                        )
-                      : const FetchNetLogo(size: 44),
-                ),
-              ),
-            ),
+            rail,
             Expanded(child: body),
           ],
         ),

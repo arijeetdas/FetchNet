@@ -6,6 +6,7 @@ import '../../widgets/app_dialog.dart';
 import '../../widgets/brand.dart';
 import '../../widgets/site_icon.dart';
 import 'home_kit.dart';
+import '../../ui_kit/kit.dart';
 
 /// Shortcuts to popular sites on Home, plus "Add site" and a plain browser.
 class SitesPanel extends StatelessWidget {
@@ -105,7 +106,7 @@ class SitesPanel extends StatelessWidget {
     final services = AppScope.of(context);
     final index = services.sites.custom.indexWhere((s) => s.key == site.key);
     final last = services.sites.custom.length - 1;
-    await showModalBottomSheet<void>(
+    await showKitSheet<void>(
       context: context,
       showDragHandle: true,
       constraints: const BoxConstraints(maxWidth: 560),
@@ -155,7 +156,7 @@ class SitesPanel extends StatelessWidget {
 
   static Future<void> _showManageSheet(BuildContext context) async {
     final services = AppScope.of(context);
-    await showModalBottomSheet<void>(
+    await showKitSheet<void>(
       context: context,
       showDragHandle: true,
       isScrollControlled: true,
@@ -418,7 +419,7 @@ class _AddSiteDialogState extends State<_AddSiteDialog> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
-    return AlertDialog(
+    return KitAlertDialog(
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(28)),
       icon: Icon(Icons.add_link_rounded, color: scheme.primary),
       title: const Text('Add a site'),

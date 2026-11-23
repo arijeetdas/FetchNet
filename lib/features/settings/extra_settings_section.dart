@@ -5,6 +5,7 @@ import '../../core/platform/device_environment.dart';
 import '../../models/media_info.dart';
 import '../../services/extra_settings.dart';
 import 'settings_widgets.dart';
+import '../../ui_kit/kit.dart';
 
 /// Settings → Extra Settings: subtitles, quick download presets, download
 /// limits and copied links.
@@ -33,7 +34,7 @@ class ExtraSettingsCards extends StatelessWidget {
           ExtraCard.browser: SettingsCard(
               padding: const EdgeInsets.fromLTRB(18, 6, 18, 6),
               children: [
-                SwitchListTile(
+                KitSwitchListTile(
                   contentPadding: EdgeInsets.zero,
                   value: s.blockAds,
                   onChanged: s.setBlockAds,
@@ -44,7 +45,7 @@ class ExtraSettingsCards extends StatelessWidget {
                   ),
                 ),
                 const Divider(height: 8),
-                SwitchListTile(
+                KitSwitchListTile(
                   contentPadding: EdgeInsets.zero,
                   value: s.detectClipboard,
                   onChanged: s.setDetectClipboard,
@@ -159,7 +160,7 @@ class _SubtitlesCard extends StatelessWidget {
     return SettingsCard(
       padding: const EdgeInsets.fromLTRB(18, 6, 18, 6),
       children: [
-        SwitchListTile(
+        KitSwitchListTile(
           contentPadding: EdgeInsets.zero,
           value: s.subtitles,
           onChanged: s.setSubtitles,
@@ -233,7 +234,7 @@ class _SubtitlesCard extends StatelessWidget {
                           ),
                         ),
                         const SizedBox(height: 6),
-                        SwitchListTile(
+                        KitSwitchListTile(
                           contentPadding: const EdgeInsets.symmetric(horizontal: 4),
                           value: s.autoCaptions,
                           onChanged: s.setAutoCaptions,
@@ -248,7 +249,7 @@ class _SubtitlesCard extends StatelessWidget {
                     const Divider(height: 8),
                     // Merged or separate: one switch (shown only while
                     // subtitles are on).
-                    SwitchListTile(
+                    KitSwitchListTile(
                       contentPadding: const EdgeInsets.symmetric(horizontal: 4),
                       value: ffmpeg && s.mergeSubtitles,
                       onChanged: ffmpeg ? s.setMergeSubtitles : null,
@@ -267,7 +268,7 @@ class _SubtitlesCard extends StatelessWidget {
                       alignment: Alignment.topCenter,
                       child: !(ffmpeg && s.mergeSubtitles)
                           ? const SizedBox(width: double.infinity)
-                          : SwitchListTile(
+                          : KitSwitchListTile(
                               contentPadding: const EdgeInsets.only(left: 20, right: 4),
                               value: s.keepSubtitleFiles,
                               onChanged: s.setKeepSubtitleFiles,
@@ -304,7 +305,7 @@ class _LyricsCard extends StatelessWidget {
     return SettingsCard(
       padding: const EdgeInsets.fromLTRB(18, 6, 18, 6),
       children: [
-        SwitchListTile(
+        KitSwitchListTile(
           contentPadding: EdgeInsets.zero,
           value: s.lyrics,
           onChanged: s.setLyrics,
@@ -324,7 +325,7 @@ class _LyricsCard extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     const Divider(height: 8),
-                    SwitchListTile(
+                    KitSwitchListTile(
                       contentPadding: const EdgeInsets.symmetric(horizontal: 4),
                       value: merge,
                       onChanged: ffmpeg ? s.setMergeLyrics : null,
@@ -343,7 +344,7 @@ class _LyricsCard extends StatelessWidget {
                       alignment: Alignment.topCenter,
                       child: !merge
                           ? const SizedBox(width: double.infinity)
-                          : SwitchListTile(
+                          : KitSwitchListTile(
                               contentPadding: const EdgeInsets.only(left: 20, right: 4),
                               value: s.keepLyricsFile,
                               onChanged: s.setKeepLyricsFile,
@@ -414,7 +415,7 @@ class _PresetsCard extends StatelessWidget {
         const SizedBox(height: 8),
         Text('Playlists and channels download as', style: theme.textTheme.bodyMedium),
         const SizedBox(height: 8),
-        SegmentedButton<MediaKind>(
+        KitSegmented<MediaKind>(
           segments: const [
             ButtonSegment(value: MediaKind.video, icon: Icon(Icons.movie_rounded), label: Text('Video')),
             ButtonSegment(value: MediaKind.audio, icon: Icon(Icons.music_note_rounded), label: Text('Audio')),
@@ -450,15 +451,7 @@ class _Choice<T> extends StatelessWidget {
       child: Row(
         children: [
           Expanded(child: Text(label, style: theme.textTheme.bodyMedium)),
-          DropdownButton<T>(
-            value: value,
-            underline: const SizedBox(),
-            borderRadius: BorderRadius.circular(14),
-            items: [for (final (v, text) in items) DropdownMenuItem(value: v, child: Text(text))],
-            onChanged: (v) {
-              if (v != null) onChanged(v);
-            },
-          ),
+          KitDropdown<T>(value: value, items: items, onChanged: onChanged),
         ],
       ),
     );
@@ -484,7 +477,7 @@ class _DownloadsCard extends StatelessWidget {
         ),
         if (DeviceEnvironment.isAndroid) ...[
           const SizedBox(height: 6),
-          SwitchListTile(
+          KitSwitchListTile(
             contentPadding: EdgeInsets.zero,
             value: s.wifiOnly,
             onChanged: s.setWifiOnly,
@@ -509,7 +502,7 @@ class _DownloadsCard extends StatelessWidget {
             ),
           ],
         ),
-        Slider(
+        KitSlider(
           value: atOnce.toDouble(),
           min: 1,
           max: ExtraSettings.maxConcurrentLimit.toDouble(),

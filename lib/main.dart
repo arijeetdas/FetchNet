@@ -8,6 +8,7 @@ import 'core/platform/device_environment.dart';
 import 'services/app_updater.dart';
 import 'services/web_session.dart';
 import 'services/windows_self_update.dart';
+import 'ui_kit/glass_kit.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -15,6 +16,8 @@ Future<void> main() async {
   final prefs = await AppPrefs.load();
   await DeviceEnvironment.initialize();
   await WebSession.initialize();
+  // Liquid Glass on: its shaders are ready before the first frame.
+  if (prefs.liquidGlass) await GlassKit.prepare();
   final services = AppServices.create(prefs);
   runApp(FetchNetApp(services: services));
   // The app is up: an in-app update that just happened worked, so its old

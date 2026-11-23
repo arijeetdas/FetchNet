@@ -3,6 +3,9 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 
 import '../models/media_info.dart';
+import '../ui_kit/glass_kit.dart';
+import '../ui_kit/material_kit.dart';
+import '../ui_kit/ui_look.dart';
 import 'brand.dart';
 import 'kind_icon.dart';
 
@@ -113,31 +116,8 @@ class PillButton extends StatelessWidget {
   final bool danger;
 
   @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final scheme = theme.colorScheme;
-    final bg = danger ? scheme.errorContainer.withValues(alpha: 0.75) : scheme.secondaryContainer.withValues(alpha: 0.8);
-    final fg = danger ? scheme.onErrorContainer : scheme.onSecondaryContainer;
-    return Material(
-      color: bg,
-      shape: const StadiumBorder(),
-      clipBehavior: Clip.antiAlias,
-      child: InkWell(
-        onTap: onPressed,
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(12, 8, 15, 8),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(icon, size: 18, color: fg),
-              const SizedBox(width: 6),
-              Text(label, style: theme.textTheme.labelLarge?.copyWith(color: fg, fontWeight: FontWeight.w800)),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
+  Widget build(BuildContext context) =>
+      context.liquidGlass ? GlassKit.pillButton(context, this) : MaterialKit.pillButton(context, this);
 }
 
 /// A tile with an icon, a number and a label; tap to pick it (History's

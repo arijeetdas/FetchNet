@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/cupertino.dart' show CupertinoIcons;
 import 'package:flutter/material.dart';
 
 import '../../core/app_services.dart';
@@ -20,6 +21,7 @@ import 'youtube_hub.dart';
 import 'youtube_settings_screen.dart';
 import 'youtube_watch_screen.dart';
 import 'youtube_widgets.dart';
+import '../../ui_kit/kit.dart';
 
 /// FetchNet's own YouTube view: the signed-in account's feeds (Home,
 /// Trending, Music, Channels), search and the player. Pops with a
@@ -45,6 +47,14 @@ class _YouTubeScreenState extends State<YouTubeScreen> implements YouTubeHub {
     (Icons.local_fire_department_outlined, Icons.local_fire_department_rounded, 'Trending'),
     (Icons.music_note_outlined, Icons.music_note_rounded, 'Music'),
     (Icons.subscriptions_outlined, Icons.subscriptions_rounded, 'Channels'),
+  ];
+
+  /// With Liquid Glass: iOS-style icons (outline, and filled when selected).
+  static const _glassTabs = [
+    (CupertinoIcons.house, CupertinoIcons.house_fill),
+    (CupertinoIcons.flame, CupertinoIcons.flame_fill),
+    (CupertinoIcons.music_note, CupertinoIcons.music_note),
+    (CupertinoIcons.rectangle_stack, CupertinoIcons.rectangle_stack_fill),
   ];
 
   int _index = 0;
@@ -311,7 +321,10 @@ class _YouTubeScreenState extends State<YouTubeScreen> implements YouTubeHub {
       showBack: true,
     );
 
-    final items = [for (final t in _tabs) LiquidNavItem(icon: t.$1, selectedIcon: t.$2, label: t.$3)];
+    final items = [
+      for (final (i, t) in _tabs.indexed)
+        LiquidNavItem(icon: t.$1, selectedIcon: t.$2, label: t.$3, glassIcon: _glassTabs[i].$1, glassSelectedIcon: _glassTabs[i].$2),
+    ];
 
     Widget page;
     if (!useRail) {
@@ -999,7 +1012,7 @@ class _ChannelsTabState extends State<_ChannelsTab> {
           padding: const EdgeInsets.fromLTRB(16, 6, 16, 12),
           child: Align(
             alignment: Alignment.centerLeft,
-            child: SegmentedButton<bool>(
+            child: KitSegmented<bool>(
               showSelectedIcon: false,
               segments: const [
                 ButtonSegment(value: false, icon: Icon(Icons.video_library_outlined), label: Text('Videos')),

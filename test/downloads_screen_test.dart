@@ -25,7 +25,7 @@ void main() {
         ('Audio/Song.mp3', MediaKind.audio),
         ('Audio/Song from a video.webm', MediaKind.audio),
       ].indexed) {
-        final f = File('${tmp.path}/$name')..writeAsStringSync('x');
+        final f = File('${s.storage.downloadDir}/$name')..writeAsStringSync('x');
         await s.history.add(HistoryEntry(
           id: '$i',
           url: 'https://example.com/$i',

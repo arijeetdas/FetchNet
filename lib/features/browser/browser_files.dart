@@ -3,6 +3,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../../models/media_info.dart';
 import '../../widgets/app_dialog.dart';
+import '../../ui_kit/kit.dart';
 
 /// What Browser Mode downloads: video, audio, pictures and subtitles (and
 /// streams, which go to yt-dlp). Everything else is refused.
@@ -104,7 +105,7 @@ Future<void> showUnsupportedFileDialog(BuildContext context, {required String ur
     builder: (context) {
       final theme = Theme.of(context);
       final scheme = theme.colorScheme;
-      return AlertDialog(
+      return KitAlertDialog(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(28)),
         icon: Icon(Icons.block_rounded, color: scheme.error, size: 32),
         title: const Text('File not supported'),

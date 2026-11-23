@@ -16,6 +16,7 @@ import '../../widgets/brand.dart';
 import '../home/media_preview.dart';
 import '../player/audio_player_screen.dart';
 import '../player/video_player_screen.dart';
+import '../../ui_kit/kit.dart';
 import '../youtube/youtube_download_sheet.dart' show youTubeVideoId;
 
 /// Tapping a saved file: songs and videos play in FetchNet's players, pictures open
@@ -127,7 +128,7 @@ Future<void> shareEntryLink(BuildContext context, HistoryEntry entry) async {
 
 /// The ⋮ menu of a saved file: preview, quick actions and more options.
 Future<void> showFileActions(BuildContext context, HistoryEntry entry, {required Widget thumbnail}) {
-  return showModalBottomSheet<void>(
+  return showKitSheet<void>(
     context: context,
     showDragHandle: true,
     isScrollControlled: true,

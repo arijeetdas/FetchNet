@@ -11,7 +11,13 @@ class LiquidNavItem {
     required this.label,
     this.badge = 0,
     this.dot = false,
+    this.glassIcon,
+    this.glassSelectedIcon,
   });
+
+  /// With Liquid Glass: iOS-style icons (SF Symbols' look).
+  final IconData? glassIcon;
+  final IconData? glassSelectedIcon;
 
   final IconData icon;
   final IconData selectedIcon;

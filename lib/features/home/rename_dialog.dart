@@ -9,6 +9,7 @@ import '../../models/media_info.dart';
 import '../../services/storage_service.dart';
 import '../../widgets/app_dialog.dart';
 import '../../widgets/brand.dart';
+import '../../ui_kit/kit.dart';
 
 /// Asks for the file name before a download starts. Returns the final base
 /// name (without extension), or `null` when cancelled. An empty field gets a
@@ -166,7 +167,7 @@ class _RenameDialogState extends State<_RenameDialog> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
-    return AlertDialog(
+    return KitAlertDialog(
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(28)),
       titlePadding: const EdgeInsets.fromLTRB(24, 24, 24, 8),
       contentPadding: const EdgeInsets.fromLTRB(24, 8, 24, 0),

@@ -18,6 +18,30 @@ Versions follow `version: <name>+<build>` in `pubspec.yaml`.
 
 ---
 
+## 🚀 v1.3.4 — 2026-11-23
+
+> **Build 11** · Liquid Glass, much faster clips and snapshots, a fix for them on Android, and a tidier save folder.
+
+### 🆕 New
+
+- 🫧 **Liquid Glass**, in Settings → Appearance (off by default): Apple's iOS 26 glass for the navigation bar (with its lens that lifts and follows your finger, and iOS-style icons), the side bar on tablets and computers, header buttons, dialogs, sheets, menus, switches, sliders and the buttons floating over pictures. Turn it off and FetchNet looks as it always has.
+- 🎚️ **Make the glass your own**: with Liquid Glass on, sliders set its opacity, and add reflection (light catching on it) and refraction (it bending what's behind it, like a lens). Both start off.
+
+### 🛠️ Improved
+
+- 🔙 **Floating back buttons**: pages like Creator Settings, Engines and YouTube Settings scroll under a round back button that stays put in a soft blur, and their title steps aside as you scroll.
+- ⚡ **Much faster clips and snapshots**: FetchNet now reads just the part it needs straight from the video, fetched in pieces at full speed instead of the slow trickle sites allow a single stream. A 30-second exact clip took 19 s instead of over 2 minutes on a PC, and a 4K snapshot a few seconds.
+- 🎯 **Exact cuts and 9:16 in one go**: the part is copied out first, then encoded once to H.264, straight to Shorts & Reels format when asked, instead of being re-encoded while it downloads.
+- 📁 **A FetchNet folder in the folder you choose**: picking a save location now makes a FetchNet folder there, with Images, Audio and Video inside, instead of putting them straight in your folder. A folder that's already named FetchNet is used as it is.
+
+### 🐞 Fixed
+
+#### 🤖 Android
+
+- 🧩 **Clips and snapshots no longer fail with "library libc++_shared.so not found"** after downloading the whole video: FetchNet's own FFmpeg runs now find the library they need.
+
+---
+
 ## 🚀 v1.3.3 — 2026-11-23
 
 > **Build 10** · Creator tools for clips, Shorts & Reels and snapshots, a save folder of your choice, and fresh Settings, Downloads, History and music player.

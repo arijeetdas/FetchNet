@@ -9,6 +9,8 @@ import '../../widgets/brand.dart';
 import '../home/home_kit.dart';
 import '../shell/home_shell.dart';
 import 'settings_widgets.dart';
+import '../../ui_kit/kit.dart';
+import '../../widgets/sub_page.dart';
 
 /// Settings → Creator Settings: clips of videos and songs, Shorts / Reels
 /// (9:16) and snapshots, for YouTube and most other sites.
@@ -62,7 +64,7 @@ class CreatorSettingsScreen extends StatelessWidget {
                 ),
             };
             return ListView(
-              padding: EdgeInsets.fromLTRB(wide ? 28 : 16, 4, wide ? 28 : 16, 32 + MediaQuery.paddingOf(context).bottom),
+              padding: EdgeInsets.fromLTRB(wide ? 28 : 16, MediaQuery.paddingOf(context).top + 4, wide ? 28 : 16, 32 + MediaQuery.paddingOf(context).bottom),
               children: [
                 Center(
                   child: ConstrainedBox(
@@ -85,11 +87,7 @@ class CreatorSettingsScreen extends StatelessWidget {
       },
     );
 
-    return Scaffold(
-      appBar: AppBar(title: const Text('Creator Settings'), backgroundColor: wide ? null : Colors.transparent),
-      extendBodyBehindAppBar: !wide,
-      body: wide ? body : AuroraBackground(intensity: 0.5, child: SafeArea(bottom: false, child: body)),
-    );
+    return SubPageScaffold(title: 'Creator Settings', background: !wide, body: body);
   }
 }
 
@@ -401,7 +399,7 @@ class _ToolCard extends StatelessWidget {
                     ],
                   ),
                 ),
-                if (value != null) ...[const SizedBox(width: 8), Switch(value: value!, onChanged: onChanged)],
+                if (value != null) ...[const SizedBox(width: 8), KitSwitch(value: value!, onChanged: onChanged)],
               ],
             ),
             const SizedBox(height: 16),

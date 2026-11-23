@@ -9,6 +9,8 @@ import '../../widgets/site_icon.dart';
 import '../settings/settings_widgets.dart';
 import '../shell/home_shell.dart';
 import 'google_sign_in_screen.dart';
+import '../../ui_kit/kit.dart';
+import '../../widgets/sub_page.dart';
 
 /// Settings → YouTube Settings: Google sign-in, thumbnail downloads, tags.
 class YouTubeSettingsScreen extends StatefulWidget {
@@ -60,7 +62,7 @@ class _YouTubeSettingsScreenState extends State<YouTubeSettingsScreen> {
     final body = ListenableBuilder(
       listenable: youtube,
       builder: (context, _) => ListView(
-        padding: EdgeInsets.fromLTRB(wide ? 28 : 16, 0, wide ? 28 : 16, 32 + MediaQuery.paddingOf(context).bottom),
+        padding: EdgeInsets.fromLTRB(wide ? 28 : 16, MediaQuery.paddingOf(context).top, wide ? 28 : 16, 32 + MediaQuery.paddingOf(context).bottom),
         children: [
           Center(
             child: ConstrainedBox(
@@ -113,7 +115,7 @@ class _YouTubeSettingsScreenState extends State<YouTubeSettingsScreen> {
                   SettingsCard(
                     padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 6),
                     children: [
-                      SwitchListTile(
+                      KitSwitchListTile(
                         contentPadding: EdgeInsets.zero,
                         secondary: const _TileIcon(Icons.image_rounded),
                         value: youtube.thumbnailDownloads,
@@ -123,7 +125,7 @@ class _YouTubeSettingsScreenState extends State<YouTubeSettingsScreen> {
                             'YouTube videos only.'),
                       ),
                       const Divider(height: 12),
-                      SwitchListTile(
+                      KitSwitchListTile(
                         contentPadding: EdgeInsets.zero,
                         secondary: const _TileIcon(Icons.sell_rounded),
                         value: youtube.showTags,
@@ -133,7 +135,7 @@ class _YouTubeSettingsScreenState extends State<YouTubeSettingsScreen> {
                             'them all. YouTube videos only.'),
                       ),
                       const Divider(height: 12),
-                      SwitchListTile(
+                      KitSwitchListTile(
                         contentPadding: EdgeInsets.zero,
                         secondary: const _TileIcon(Icons.image_aspect_ratio_rounded),
                         value: youtube.videoCoverArt,
@@ -148,7 +150,7 @@ class _YouTubeSettingsScreenState extends State<YouTubeSettingsScreen> {
                   SettingsCard(
                     padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 6),
                     children: [
-                      SwitchListTile(
+                      KitSwitchListTile(
                         contentPadding: EdgeInsets.zero,
                         secondary: const _TileIcon(Icons.album_rounded),
                         value: youtube.musicCoverArt,
@@ -167,19 +169,7 @@ class _YouTubeSettingsScreenState extends State<YouTubeSettingsScreen> {
       ),
     );
 
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('YouTube Settings'),
-        backgroundColor: wide ? null : Colors.transparent,
-      ),
-      extendBodyBehindAppBar: !wide,
-      body: wide
-          ? body
-          : AuroraBackground(
-              intensity: 0.5,
-              child: SafeArea(bottom: false, child: body),
-            ),
-    );
+    return SubPageScaffold(title: 'YouTube Settings', background: !wide, body: body);
   }
 }
 

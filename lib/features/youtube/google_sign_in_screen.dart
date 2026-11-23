@@ -7,6 +7,7 @@ import '../../core/app_services.dart';
 import '../../services/web_session.dart';
 import '../../services/youtube_service.dart';
 import '../../widgets/brand.dart';
+import '../../ui_kit/kit.dart';
 
 /// Google's own sign-in page in the built-in browser. Closes by itself with
 /// `true` once Google hands back to YouTube with a signed-in session.
@@ -51,9 +52,9 @@ class _GoogleSignInScreenState extends State<GoogleSignInScreen> {
       child: Scaffold(
         appBar: AppBar(
           backgroundColor: scheme.surfaceContainerLow,
-          leading: IconButton(
+          leading: KitBackButton(
+            close: true,
             tooltip: 'Cancel',
-            icon: const Icon(Icons.close_rounded),
             onPressed: () => Navigator.of(context).pop(false),
           ),
           titleSpacing: 0,

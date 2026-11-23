@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../../models/download_models.dart';
 import '../../widgets/app_dialog.dart';
+import '../../ui_kit/kit.dart';
 
 /// What "Clear history" takes out of the list.
 enum ClearScope {
@@ -67,7 +68,7 @@ class _ClearHistoryDialogState extends State<_ClearHistoryDialog> {
     final scheme = theme.colorScheme;
     final n = _counts[_scope]!;
     final (saved, failed, cancelled) = _stats;
-    return Dialog(
+    return KitDialog(
       backgroundColor: scheme.surface,
       surfaceTintColor: Colors.transparent,
       insetPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),

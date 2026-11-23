@@ -20,6 +20,7 @@ import 'lyrics_service.dart';
 import 'lyrics_store.dart';
 import 'mp3_lyrics.dart';
 import 'storage_service.dart';
+import 'stream_relay.dart';
 
 /// Extra yt-dlp arguments a download gets from the user's settings.
 typedef DownloadArgsProvider = List<String> Function(MediaInfo info, DownloadOption option);
@@ -573,6 +574,27 @@ class DownloadManager extends ChangeNotifier {
       _syncNotifications();
     }
 
+    // A clip or snapshot: cut straight from the streams first (fast); the
+    // part downloads below are its fallbacks.
+    if (task.creator != null && !task.cutLocally && !task.directTried && engine.status.value.ffmpegAvailable) {
+      task.directTried = true;
+      final cut = await _directCut(task, dir);
+      if (cut == _Cut.stopped) {
+        task.directTried = false; // resumed: tried again
+        await _settleStop(task);
+        notifyListeners();
+        _pump();
+        return;
+      }
+      if (cut == _Cut.done) {
+        await _complete(task, dir);
+        notifyListeners();
+        _pump();
+        return;
+      }
+      resetProgress('Trying another way…');
+    }
+
     while (true) {
       // Just a part: FFmpeg downloads it and reports its own progress. A part
       // that makes no progress for a minute is given up on (below).
@@ -752,7 +774,7 @@ class DownloadManager extends ChangeNotifier {
       final total = job.length.inMicroseconds;
       final result = await _ffmpeg(
         task,
-        cutArgs(input: source, output: out, job: job, video: video),
+        cutArgs(input: source, output: out, job: job, video: video, preset: _x264Preset),
         onLine: (line) {
           if (total <= 0 || !line.startsWith('out_time_us=')) return;
           final us = int.tryParse(line.substring('out_time_us='.length));
@@ -795,7 +817,7 @@ class DownloadManager extends ChangeNotifier {
     final total = job.length.inMicroseconds;
     final result = await _ffmpeg(
       task,
-      shortsArgs(input: source, output: part, shape: shape, background: job.background),
+      shortsArgs(input: source, output: part, shape: shape, background: job.background, preset: _x264Preset),
       onLine: (line) {
         // FFmpeg's -progress: out_time_us=12345678
         if (total <= 0 || !line.startsWith('out_time_us=')) return;
@@ -831,6 +853,219 @@ class DownloadManager extends ChangeNotifier {
     if (job.isSnapshot) return 'Finding the moment…';
     if (task.expectedParts > 1) return task.sectionPart <= 1 ? 'Cutting the video…' : 'Cutting the audio…';
     return 'Cutting the clip…';
+  }
+
+  /// The H.264 encoder's speed for exact cuts and Shorts: phones favour
+  /// speed, computers a smaller file.
+  String get _x264Preset => !kIsWeb && Platform.isAndroid ? 'superfast' : 'veryfast';
+
+  /// A clip or snapshot cut straight from the streams, the fast way: yt-dlp
+  /// only lists where the streams are, and FFmpeg reads just the part it
+  /// needs from them through a [StreamRelay] (which fetches in closed byte
+  /// ranges at full speed). An exact or 9:16 clip is copied out first and
+  /// encoded from that local copy.
+  Future<_Cut> _directCut(DownloadTask task, String dir) async {
+    final job = task.creator!;
+    bool stopped() => _pausing.containsKey(task.id) || task.stage == 'Cancelling…';
+    task
+      ..status = DownloadStatus.starting
+      ..stage = job.isSnapshot ? 'Finding the moment…' : 'Finding the clip…'
+      ..progress = null;
+    _throttledNotify(force: true);
+
+    // ───── Where the streams are ─────
+    final formatArgs = job.isSnapshot ? videoOnlyFormatArgs(task.option.formatArgs) : task.option.formatArgs;
+    final run = engine.start(task.id, [...formatArgs, ...task.requestArgs, '--no-playlist', '--no-warnings', '-j', '--', task.url]);
+    _runs[task.id] = run;
+    String? json;
+    final sub = run.lines.listen((l) {
+      if (l.trimLeft().startsWith('{')) json = l;
+    });
+    final listed = await run.done;
+    await sub.cancel();
+    _runs.remove(task.id);
+    if (stopped()) return _Cut.stopped;
+    if (!listed.ok) {
+      await _addCookiesIfRefused(task, extractEngineError(listed.stderr.isEmpty ? listed.stdout : listed.stderr));
+      return _Cut.fallback;
+    }
+    json ??= listed.stdout.split('\n').where((l) => l.trimLeft().startsWith('{')).lastOrNull;
+    ResolvedStreams? streams;
+    try {
+      streams = ResolvedStreams.fromInfo((jsonDecode(json!) as Map).cast<String, dynamic>());
+    } catch (_) {}
+    final wantsVideo = job.isSnapshot || task.option.kind == MediaKind.video;
+    final video = streams?.video, audio = streams?.audio;
+    if (streams == null || (wantsVideo ? video == null || !video.usable : audio == null || !audio.usable)) return _Cut.fallback;
+
+    // ───── FFmpeg reads them through the relay ─────
+    var lastActivity = DateTime.now();
+    var stalled = false;
+    task.downloadedBytes = 0;
+    final relay = StreamRelay(
+      onBytes: (n) {
+        lastActivity = DateTime.now();
+        task.downloadedBytes = (task.downloadedBytes ?? 0) + n;
+        _throttledNotify();
+      },
+    );
+    // Nothing read and no progress for 45 s: given up on (the fallbacks
+    // take over).
+    final watchdog = Timer.periodic(const Duration(seconds: 5), (_) {
+      if (DateTime.now().difference(lastActivity) > const Duration(seconds: 45)) {
+        stalled = true;
+        unawaited(_runs[task.id]?.cancel());
+      }
+    });
+    final work = await storage.workDir('creator/${task.id}');
+    final made = <String>[];
+
+    Future<FfInput> input(StreamSource s) async {
+      const timeout = ['-rw_timeout', '30000000'];
+      if (s.progressive) {
+        final local = await relay.add(s.url, headers: s.headers);
+        if (local != null) return FfInput('$local', timeout);
+      }
+      return FfInput('${s.url}', [...timeout, ...s.ffmpegHeaders]);
+    }
+
+    /// Runs FFmpeg; its progress (from [from] to [to] of the bar) also
+    /// counts as activity.
+    Future<EngineResult> step(List<String> args, {double from = 0, double to = 1}) {
+      final total = job.length.inMicroseconds;
+      return _ffmpeg(task, args, onLine: (line) {
+        if (!line.startsWith('out_time_us=')) return;
+        lastActivity = DateTime.now();
+        final us = int.tryParse(line.substring('out_time_us='.length));
+        if (total <= 0 || us == null || us < 0) return;
+        task.progress = (from + (to - from) * (us / total)).clamp(0.0, 0.99).toDouble();
+        _throttledNotify();
+      });
+    }
+
+    /// The file FFmpeg wrote, when it's there and not empty.
+    bool wrote(EngineResult r, String path) {
+      made.add(path);
+      return r.ok && File(path).existsSync() && File(path).lengthSync() > 0;
+    }
+
+    /// [part] becomes [path] (FFmpeg writes under a temporary name).
+    String keep(String part, String path) {
+      if (File(path).existsSync()) File(path).deleteSync();
+      try {
+        File(part).renameSync(path);
+      } on FileSystemException {
+        // Another drive (the work folder): copied over instead.
+        File(part).copySync(path);
+        File(part).deleteSync();
+      }
+      made.remove(part);
+      return path;
+    }
+
+    String temp(String ext) => p.join(dir, '${task.fileBaseName}.fetchnet-part.$ext');
+
+    try {
+      task.status = DownloadStatus.downloading;
+      if (job.isSnapshot) {
+        task.stage = 'Saving the snapshot…';
+        _throttledNotify(force: true);
+        final v = await input(video!);
+        if (stopped()) return _Cut.stopped;
+        final part = temp(job.snapshotFormat.extension);
+        final r = await _ffmpeg(
+          task,
+          snapshotArgs(input: v.url, inputOptions: v.options, output: part, format: job.snapshotFormat, seek: job.snapshotAt),
+        );
+        if (stopped()) return _Cut.stopped;
+        if (stalled || !wrote(r, part)) return _Cut.fallback;
+        task.filePath = keep(part, p.join(dir, '${task.fileBaseName}.${job.snapshotFormat.extension}'));
+        return _Cut.done;
+      }
+
+      if (!wantsVideo) {
+        // A song's part, saved as its format asks.
+        final (ext, codec) = AudioTarget.fromArgs(task.option.formatArgs).encode(codec: audio!.acodec, sourceExt: audio.ext);
+        task.stage = 'Downloading the clip…';
+        _throttledNotify(force: true);
+        final a = await input(audio);
+        if (stopped()) return _Cut.stopped;
+        final part = temp(ext);
+        final r = await step(streamAudioClipArgs(audio: a, job: job, output: part, audioCodec: codec, metadata: streams.metadata));
+        if (stopped()) return _Cut.stopped;
+        if (stalled || !wrote(r, part)) return _Cut.fallback;
+        task.filePath = keep(part, p.join(dir, '${task.fileBaseName}.$ext'));
+        return _Cut.done;
+      }
+
+      // A video's part: copied out of the streams (the clip itself when
+      // cuts needn't be exact), then encoded for exact cuts or 9:16.
+      var shape = video!.width != null && video.height != null ? VideoShape(video.width!, video.height!) : null;
+      final encode = job.exactCuts || (job.shorts && (shape == null || shape.landscape));
+      task.stage = 'Downloading the clip…';
+      _throttledNotify(force: true);
+      final v = await input(video);
+      final a = audio != null && !identical(audio, video) ? await input(audio) : null;
+      if (stopped()) return _Cut.stopped;
+      final copied = encode ? p.join(work.path, 'part.mp4') : temp('mp4');
+      final r = await step(streamCopyArgs(video: v, audio: a, job: job, output: copied), to: encode ? 0.3 : 1);
+      await relay.close(); // all that's needed is here
+      if (stopped()) return _Cut.stopped;
+      if (stalled || !wrote(r, copied)) return _Cut.fallback;
+      final out = p.join(dir, '${task.fileBaseName}.mp4');
+      if (!encode) {
+        task.filePath = keep(copied, out);
+        return _Cut.done;
+      }
+      if (shape == null && job.shorts) {
+        final probe = await _ffmpeg(task, probeArgs(copied), probe: true);
+        if (stopped()) return _Cut.stopped;
+        try {
+          shape = VideoShape.fromProbe((jsonDecode(probe.stdout) as Map).cast<String, dynamic>());
+        } catch (_) {}
+      }
+      final shorts = job.shorts && shape != null && shape.landscape;
+      if (!job.exactCuts && !shorts) {
+        // Already portrait, and cuts needn't be exact: the copy is the clip.
+        task.filePath = keep(copied, out);
+        return _Cut.done;
+      }
+      task
+        ..status = DownloadStatus.processing
+        ..stage = shorts ? 'Making it 9:16 for Shorts & Reels…' : 'Cutting it exactly…';
+      _throttledNotify(force: true);
+      final part = temp('mp4');
+      final e = await step(clipEncodeArgs(input: copied, job: job, output: part, shape: shape, preset: _x264Preset), from: 0.3);
+      if (stopped()) return _Cut.stopped;
+      if (stalled || !wrote(e, part)) return _Cut.fallback;
+      task.filePath = keep(part, out);
+      return _Cut.done;
+    } catch (_) {
+      return stopped() ? _Cut.stopped : _Cut.fallback;
+    } finally {
+      watchdog.cancel();
+      await relay.close();
+      for (final f in made) {
+        try {
+          if (File(f).existsSync()) File(f).deleteSync();
+        } catch (_) {}
+      }
+      unawaited(_cleanup(work));
+      if (task.status != DownloadStatus.completed) task.downloadedBytes = null;
+    }
+  }
+
+  /// A download that stopped while working: paused (kept for later) or
+  /// cancelled.
+  Future<void> _settleStop(DownloadTask task) async {
+    if (_pausing.containsKey(task.id)) {
+      _settlePause(task);
+    } else if (task.stage == 'Cancelling…') {
+      task.status = DownloadStatus.cancelled;
+      _tasks.remove(task);
+      await _record(task);
+      _finishNotification(task);
+    }
   }
 
   /// Runs FFmpeg (or ffprobe) for [task]; cancel / pause stop it like yt-dlp.
@@ -896,8 +1131,10 @@ class DownloadManager extends ChangeNotifier {
 
   Future<EngineResult> _runYtDlp(DownloadTask task, String dir, Directory temp, List<String> extra) async {
     final rate = settings?.rateArg;
+    final snapshot = task.creator?.isSnapshot ?? false;
     final args = <String>[
-      ...task.option.formatArgs,
+      // A snapshot's whole download needs only the picture.
+      ...(task.cutLocally && snapshot ? videoOnlyFormatArgs(task.option.formatArgs) : task.option.formatArgs),
       if (!task.cutLocally) ...?task.creator?.ytDlpArgs(),
       ...extra,
       ...task.subtitleArgs,
@@ -1467,3 +1704,6 @@ String postFilePath({required String dir, required String baseName, required Str
   }
   return p.join(dir, '$name$extension');
 }
+
+/// How a direct cut ended ([DownloadManager._directCut]).
+enum _Cut { done, fallback, stopped }

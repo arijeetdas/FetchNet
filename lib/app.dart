@@ -4,6 +4,8 @@ import 'core/app_services.dart';
 import 'core/theme.dart';
 import 'features/onboarding/onboarding_flow.dart';
 import 'features/shell/home_shell.dart';
+import 'ui_kit/glass_kit.dart';
+import 'ui_kit/ui_look.dart';
 
 class FetchNetApp extends StatelessWidget {
   const FetchNetApp({super.key, required this.services});
@@ -14,16 +16,28 @@ class FetchNetApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return AppScope(
       services: services,
-      child: ValueListenableBuilder<ThemeMode>(
-        valueListenable: services.themeMode,
-        builder: (context, mode, _) => MaterialApp(
-          title: 'FetchNet',
-          navigatorKey: services.navigatorKey,
-          debugShowCheckedModeBanner: false,
-          themeMode: mode,
-          theme: AppTheme.light(),
-          darkTheme: AppTheme.dark(),
-          home: const _StartGate(),
+      // Liquid Glass or not (the glass theme is always there, so switching
+      // keeps the app where it is).
+      child: ListenableBuilder(
+        listenable: Listenable.merge([services.liquidGlass, services.glassTuning]),
+        builder: (context, _) => UiLookScope(
+          look: services.liquidGlass.value ? UiLook.liquidGlass : UiLook.material,
+          child: GlassKit.wrap(
+            on: services.liquidGlass.value,
+            tuning: services.glassTuning.value,
+            ValueListenableBuilder<ThemeMode>(
+              valueListenable: services.themeMode,
+              builder: (context, mode, _) => MaterialApp(
+                title: 'FetchNet',
+                navigatorKey: services.navigatorKey,
+                debugShowCheckedModeBanner: false,
+                themeMode: mode,
+                theme: AppTheme.light(),
+                darkTheme: AppTheme.dark(),
+                home: const _StartGate(),
+              ),
+            ),
+          ),
         ),
       ),
     );

@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 
 import '../../models/creator_job.dart';
 import '../../widgets/app_dialog.dart';
+import '../../ui_kit/kit.dart';
 
 /// The card the creator panels sit in (like the lyrics card).
 class _PanelCard extends StatelessWidget {
@@ -98,7 +99,7 @@ class ClipPanel extends StatelessWidget {
               Expanded(
                 child: Text('Clip', style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w800)),
               ),
-              SegmentedButton<bool>(
+              KitSegmented<bool>(
                 showSelectedIcon: false,
                 style: const ButtonStyle(visualDensity: VisualDensity.compact),
                 segments: [
@@ -389,7 +390,7 @@ Future<Duration?> askClockTime(BuildContext context, {required String title, req
           }
         }
 
-        return AlertDialog(
+        return KitAlertDialog(
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(28)),
           title: Text(title),
           content: TextField(

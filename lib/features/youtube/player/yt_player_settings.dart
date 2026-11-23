@@ -3,11 +3,12 @@ import 'package:flutter/material.dart';
 import '../../../core/format.dart';
 import '../../../widgets/brand.dart';
 import 'yt_player_controller.dart';
+import '../../../ui_kit/kit.dart';
 
 /// The player's settings: quality, speed, loop, fit, listen only, autoplay
 /// and a sleep timer.
 Future<void> showYtPlayerSettings(BuildContext context, YtPlayerController controller) {
-  return showModalBottomSheet<void>(
+  return showKitSheet<void>(
     context: context,
     useSafeArea: true,
     showDragHandle: true,
@@ -118,20 +119,20 @@ class _SettingsSheetState extends State<_SettingsSheet> {
         trailing: const Icon(Icons.chevron_right_rounded),
         onTap: () => _go(_Page.speed),
       ),
-      SwitchListTile(
+      KitSwitchListTile(
         secondary: icon(Icons.headphones_rounded),
         title: const Text('Listen only'),
         subtitle: const Text('Audio without the picture, saves data'),
         value: c.listenOnly,
         onChanged: c.streams?.audio == null ? null : c.setListenOnly,
       ),
-      SwitchListTile(
+      KitSwitchListTile(
         secondary: icon(Icons.repeat_one_rounded),
         title: const Text('Loop video'),
         value: c.loop,
         onChanged: c.setLoop,
       ),
-      SwitchListTile(
+      KitSwitchListTile(
         secondary: icon(Icons.skip_next_rounded),
         title: const Text('Autoplay'),
         subtitle: const Text('Play the next video in Up next'),
@@ -141,7 +142,7 @@ class _SettingsSheetState extends State<_SettingsSheet> {
       ListTile(
         leading: icon(Icons.aspect_ratio_rounded),
         title: const Text('Picture'),
-        trailing: SegmentedButton<BoxFit>(
+        trailing: KitSegmented<BoxFit>(
           showSelectedIcon: false,
           segments: const [
             ButtonSegment(value: BoxFit.contain, icon: Icon(Icons.fit_screen_rounded), label: Text('Fit')),
@@ -231,7 +232,7 @@ class _SettingsSheetState extends State<_SettingsSheet> {
             children: [
               const Icon(Icons.slow_motion_video_rounded, size: 20),
               Expanded(
-                child: Slider(
+                child: KitSlider(
                   value: c.speed.clamp(0.25, 3.0),
                   min: 0.25,
                   max: 3,

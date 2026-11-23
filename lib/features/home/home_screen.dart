@@ -32,6 +32,7 @@ import 'playlist_view.dart';
 import 'post_result_view.dart';
 import 'sites_panel.dart';
 import 'status_deck.dart';
+import '../../ui_kit/kit.dart';
 
 enum _Phase { idle, loading, error, result }
 
@@ -444,7 +445,7 @@ class _HomeScreenState extends State<HomeScreen> {
       context: context,
       barrierDismissible: true,
       lockBack: false,
-      builder: (context) => AlertDialog(
+      builder: (context) => KitAlertDialog(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(28)),
         icon: Icon(Icons.cookie_rounded, color: scheme.primary),
         title: const Text('Use your browser\'s sign-in'),

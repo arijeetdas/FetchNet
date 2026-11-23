@@ -1,4 +1,5 @@
 import 'package:flutter/foundation.dart';
+import 'package:flutter/cupertino.dart' show CupertinoIcons;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:media_kit_video/media_kit_video.dart';
@@ -10,6 +11,7 @@ import '../../widgets/brand.dart';
 import 'player/yt_player_controller.dart';
 import 'youtube_download_sheet.dart';
 import 'youtube_widgets.dart';
+import '../../ui_kit/kit.dart';
 
 /// What the screens of FetchNet's YouTube view share: the player and the
 /// ways to open videos, channels and downloads. Implemented by the YouTube
@@ -220,7 +222,8 @@ class _MiniProgress extends StatelessWidget {
   }
 }
 
-/// Circular back button that keeps its shape in any toolbar.
+/// Circular back button that keeps its shape in any toolbar (see
+/// [KitBackButton]).
 class YtBackButton extends StatelessWidget {
   const YtBackButton({super.key, this.onPressed, this.icon = Icons.arrow_back_rounded, this.tooltip = 'Back'});
 
@@ -229,28 +232,12 @@ class YtBackButton extends StatelessWidget {
   final String tooltip;
 
   @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return Center(
-      widthFactor: 1,
-      heightFactor: 1,
-      child: SizedBox.square(
-        dimension: 44,
-        child: Tooltip(
-          message: tooltip,
-          child: Material(
-            color: scheme.surfaceContainerHigh.withValues(alpha: 0.85),
-            shape: CircleBorder(side: BorderSide(color: scheme.outlineVariant.withValues(alpha: 0.35))),
-            clipBehavior: Clip.antiAlias,
-            child: InkWell(
-              onTap: onPressed ?? () => Navigator.of(context).maybePop(),
-              child: Icon(icon, size: 22, color: scheme.onSurface),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
+  Widget build(BuildContext context) => KitBackButton(
+        onPressed: onPressed,
+        icon: icon,
+        glassIcon: icon == Icons.keyboard_arrow_down_rounded ? CupertinoIcons.chevron_down : null,
+        tooltip: tooltip,
+      );
 }
 
 /// Subscribe / Subscribed button.

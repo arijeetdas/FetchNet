@@ -24,21 +24,25 @@ Versions follow `version: <name>+<build>` in `pubspec.yaml`.
 
 ### 🆕 New
 
-- 🫧 **Liquid Glass**, in Settings → Appearance (off by default): Apple's iOS 26 glass for the navigation bar (with its lens that lifts and follows your finger, and iOS-style icons), the side bar on tablets and computers, header buttons, dialogs, sheets, menus, switches, sliders and the buttons floating over pictures. Turn it off and FetchNet looks as it always has.
-- 🎚️ **Make the glass your own**: with Liquid Glass on, sliders set its opacity, and add reflection (light catching on it) and refraction (it bending what's behind it, like a lens). Both start off.
+- 🫧 **Liquid Glass** in Settings → Appearance (off by default): Apple's iOS 26 glass for the tab bar, sidebar, header buttons, dialogs, sheets, menus and controls, with iOS-style icons. Off, FetchNet looks as it always has.
+- 🎚️ **Tune the glass**: sliders for opacity, reflection and refraction. Reflection and refraction start off.
 
 ### 🛠️ Improved
 
-- 🔙 **Floating back buttons**: pages like Creator Settings, Engines and YouTube Settings scroll under a round back button that stays put in a soft blur, and their title steps aside as you scroll.
-- ⚡ **Much faster clips and snapshots**: FetchNet now reads just the part it needs straight from the video, fetched in pieces at full speed instead of the slow trickle sites allow a single stream. A 30-second exact clip took 19 s instead of over 2 minutes on a PC, and a 4K snapshot a few seconds.
-- 🎯 **Exact cuts and 9:16 in one go**: the part is copied out first, then encoded once to H.264, straight to Shorts & Reels format when asked, instead of being re-encoded while it downloads.
-- 📁 **A FetchNet folder in the folder you choose**: picking a save location now makes a FetchNet folder there, with Images, Audio and Video inside, instead of putting them straight in your folder. A folder that's already named FetchNet is used as it is.
+- 🔙 **Floating back buttons**: sub-pages scroll under a round back button in a soft blur, and their title steps aside as you scroll.
+- ⚡ **Much faster clips and snapshots**: FetchNet reads just the part it needs, at full speed. A 30-second exact clip takes seconds instead of minutes.
+- 🎯 **Exact cuts and 9:16 in one go**: the clip is encoded once, straight to Shorts & Reels format when asked.
+- 📁 **A FetchNet folder in the folder you choose**, with Images, Audio and Video inside. A folder already named FetchNet is used as it is.
 
 ### 🐞 Fixed
 
 #### 🤖 Android
 
-- 🧩 **Clips and snapshots no longer fail with "library libc++_shared.so not found"** after downloading the whole video: FetchNet's own FFmpeg runs now find the library they need.
+- 🧩 **Clips and snapshots no longer fail with "libc++_shared.so not found"** after downloading the whole video.
+
+### ⚠️ Notes
+
+- 🪟 On Windows and Linux, glass refracts only at the edges of the tab bar and sidebar.
 
 ---
 
